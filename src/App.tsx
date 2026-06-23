@@ -178,20 +178,16 @@ export default function App() {
       <header className="w-full top-0 sticky z-40 bg-black text-white h-16 flex items-center justify-between px-4 sm:px-6 border-b border-zinc-800 shadow-none">
         <div 
           onClick={() => handleNavigateToTab("dashboard")}
-          className="flex items-center gap-3 cursor-pointer select-none group"
+          className="flex items-center cursor-pointer select-none group"
+          title="Nudge Pro"
         >
-          {/* Grayscale profile logo */}
-          <div className="w-9 h-9 overflow-hidden bg-slate-800 border border-slate-700 rounded-lg flex-shrink-0">
-            <img
-              alt="Alex's Profile"
-              className="w-full h-full object-cover grayscale brightness-95 group-hover:brightness-110"
-              src="https://lh3.googleusercontent.com/aida-public/AB6AXuBtcVtXhPUO1EwNKC6Kg5QFO1AqPqd16osBpDsztNdxzho9_-G1x4zedvmkns_8OaJ4T8TDgp49INZkna2I4iZNfuc5iuOuD2wbvEQFqyDUdO5NgKiW38SvJNLqNFIDKJ07j5ky51KPLWH88Mo5EIgT3gZxzT8OVnKkpqAvv39Jx4QypGOI9op9wD2O4SIAHkqEdNAk7K1SVL-ZO43tZtHYNHd8AgKSKVhkHLsXaZ0lQIIVOlEmHjMwT12jiGJrsZYgzadAj3BiW9c_"
-              referrerPolicy="no-referrer"
-            />
+          {/* Stylish N Alphabet Only */}
+          <div className="h-10 w-10 bg-white text-black font-extrabold flex items-center justify-center rounded-xl shadow-[0_4px_12px_rgba(0,0,0,0.5)] border border-zinc-200 group-hover:bg-zinc-100 group-hover:scale-105 active:scale-95 transition-all duration-300 relative overflow-hidden">
+            <div className="absolute left-0 top-0 bottom-0 w-[4px] bg-black"></div>
+            <span className="text-2xl font-serif italic font-black tracking-tighter leading-none select-none pl-[2px]">
+              N
+            </span>
           </div>
-          <span className="font-headline text-lg sm:text-xl font-bold tracking-tight text-white uppercase leading-none">
-            Nudge
-          </span>
         </div>
 
         {/* Action icons */}
