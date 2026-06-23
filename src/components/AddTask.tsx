@@ -1,12 +1,20 @@
 import React, { useState, useEffect } from "react";
 import { Task } from "../types";
+import { CalendarEvent, checkDeadlineConflicts } from "../calendarService";
 
 interface AddTaskProps {
   onAddTask: (newTask: Omit<Task, "id" | "completed" | "subtasks">) => void;
   onCancel: () => void;
+  gcalEvents?: CalendarEvent[];
+  gcalConnected?: boolean;
 }
 
-export default function AddTask({ onAddTask, onCancel }: AddTaskProps) {
+export default function AddTask({ 
+  onAddTask, 
+  onCancel,
+  gcalEvents = [],
+  gcalConnected = false,
+}: AddTaskProps) {
   const [title, setTitle] = useState("");
   const [details, setDetails] = useState("");
   const [priority, setPriority] = useState<"low" | "medium" | "high">("medium");
@@ -204,6 +212,18 @@ export default function AddTask({ onAddTask, onCancel }: AddTaskProps) {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [title, details, priority, deadline, timeSlot, project]);
+
+  // Find an available hourly slot on this day with zero calendar events
+  const getFreeSlotOnDay = (dateStr: string, events: CalendarEvent[]): string | null => {
+    const testSlots = ["09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00"];
+    for (const slot of testSlots) {
+      const issues = checkDeadlineConflicts(dateStr, slot, events);
+      if (issues.length === 0) {
+        return slot;
+      }
+    }
+    return null;
+  };
 
   const handleSubmitForm = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -513,7 +533,7 @@ export default function AddTask({ onAddTask, onCancel }: AddTaskProps) {
               </button>
             ))}
 
-            <div className="flex gap-2 border border-slate-250 p-1.5 rounded-lg items-center bg-slate-50 min-w-[150px] shadow-inner">
+            <div className="flex gap-2 border border-slate-250 p-1.5 rounded-lg items-center bg-slate-50 min-w-[150px] shadow-inner font-sans">
               <span className="font-mono text-[9px] text-slate-450 uppercase pl-1 font-bold">Custom:</span>
               <input
                 type="time"
@@ -525,10 +545,57 @@ export default function AddTask({ onAddTask, onCancel }: AddTaskProps) {
           </div>
         </div>
 
-        {/* Project category selection tag rows */}
+        {/* GOOGLE CALENDAR CONFLICT WATCHWARD */}
+        {gcalConnected && deadline && (() => {
+          const conflicts = checkDeadlineConflicts(deadline, timeSlot, gcalEvents);
+          if (conflicts.length === 0) {
+            return (
+              <div className="bg-emerald-50/40 border border-emerald-200/60 p-4 rounded-xl flex items-center gap-2.5 text-xs text-emerald-800">
+                <span className="material-symbols-outlined text-emerald-600 font-bold">check_circle</span>
+                <p className="font-semibold text-left">
+                  Google Calendar clear! No active events scheduled for this day/time.
+                </p>
+              </div>
+            );
+          }
+          
+          const freeSlot = getFreeSlotOnDay(deadline, gcalEvents);
+          
+          return (
+            <div className="bg-amber-50/70 border border-amber-200 p-4 rounded-xl space-y-3 font-sans">
+              <div className="flex items-start gap-2.5 text-xs text-amber-800 text-left">
+                <span className="material-symbols-outlined text-amber-700 font-bold mt-0.5">warning</span>
+                <div>
+                  <h4 className="font-bold uppercase tracking-wider text-[9px] font-mono mb-0.5">Calendar Collision!</h4>
+                  <p className="font-semibold">
+                    This deadline overlaps with <span className="font-bold underline">{conflicts.map(c => `'${c.event.summary || "Busy Slot"}'`).join(", ")}</span> on your Google Calendar.
+                  </p>
+                </div>
+              </div>
+              
+              {freeSlot && (
+                <div className="bg-white border border-amber-200/50 p-3 rounded-lg flex items-center justify-between gap-3 text-left">
+                  <div>
+                    <span className="font-mono text-[8px] text-amber-700 font-bold uppercase tracking-wider block">Suggested Fix</span>
+                    <p className="text-xs text-slate-700 font-mono font-bold uppercase">Alternate time <span className="text-black underline">{freeSlot}</span> is completely free!</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setTimeSlot(freeSlot)}
+                    className="font-mono text-[9px] uppercase font-bold tracking-wider px-3 py-1.5 bg-black text-white hover:bg-slate-800 rounded-md transition-all active:scale-95 cursor-pointer"
+                  >
+                    Use Suggestion
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* Project category selection rows */}
         <div className="space-y-1.5 bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
           <label className="block font-mono text-[10px] uppercase tracking-widest text-slate-400 font-bold">
-            Project Category Tag
+            Project Category
           </label>
           <div className="flex flex-wrap gap-1.5 items-center mt-2">
             {availableTags.map((tag) => (
@@ -570,7 +637,7 @@ export default function AddTask({ onAddTask, onCancel }: AddTaskProps) {
                 onClick={() => setShowCustomTagField(true)}
                 className="px-3 py-1.5 border border-dashed border-slate-350 text-slate-400 hover:bg-slate-100 font-mono text-[10px] uppercase tracking-wider cursor-pointer rounded-lg"
               >
-                + Add Tag
+                + Add Category
               </button>
             )}
           </div>

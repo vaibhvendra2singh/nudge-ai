@@ -16,4 +16,5 @@ export interface Task {
   subtasks: SubTask[];
   aiNudge?: string | null;
   aiBreakdownGenerated?: boolean;
+  completedAt?: string; // ISO date or YYYY-MM-DD
 }

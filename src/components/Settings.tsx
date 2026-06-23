@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from "react";
+import { Task } from "../types";
 
 interface SettingsProps {
   userName: string;
   onUpdateUserName: (name: string) => void;
   onClearAllTasks: () => void;
   totalTasksCount: number;
+  onImportTasks?: (importedTasks: Task[]) => void;
 }
 
 export default function Settings({
@@ -12,12 +14,71 @@ export default function Settings({
   onUpdateUserName,
   onClearAllTasks,
   totalTasksCount,
+  onImportTasks,
 }: SettingsProps) {
   const [nameInput, setNameInput] = useState(userName);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [showWipeConfirm, setShowWipeConfirm] = useState(false);
+
+  // Diagnostics & endpoint check
   const [healthStatus, setHealthStatus] = useState<"idle" | "testing" | "ok" | "error">("idle");
   const [healthMessage, setHealthMessage] = useState("");
-  const [showWipeConfirm, setShowWipeConfirm] = useState(false);
+  const [latency, setLatency] = useState<number | null>(null);
+
+  // Backup & Restore
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importSuccess, setImportSuccess] = useState<string | null>(null);
+  const [importOverwrites, setImportOverwrites] = useState(false);
+
+  // Voice Sandbox Playground
+  const [isListening, setIsListening] = useState(false);
+  const [transcript, setTranscript] = useState("");
+  const [speechError, setSpeechError] = useState<string | null>(null);
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [extractedResult, setExtractedResult] = useState<any | null>(null);
+  const [recognitionObj, setRecognitionObj] = useState<any>(null);
+
+  // Initialize SpeechRecognition for Playground
+  useEffect(() => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      const rec = new SpeechRecognition();
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.lang = "en-US";
+
+      rec.onresult = (event: any) => {
+        let finalTranscript = "";
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            finalTranscript += event.results[i][0].transcript;
+          }
+        }
+        if (finalTranscript) {
+          setTranscript((prev) => {
+            const separator = prev && !prev.endsWith(" ") ? " " : "";
+            return prev + separator + finalTranscript;
+          });
+        }
+      };
+
+      rec.onerror = (event: any) => {
+        console.error("Speech test error:", event.error);
+        if (event.error === "not-allowed") {
+          setSpeechError("Microphone access is not allowed in Settings. Please allow mic permissions.");
+        } else {
+          setSpeechError(`Speech error: ${event.error}`);
+        }
+        setIsListening(false);
+      };
+
+      rec.onend = () => {
+        setIsListening(false);
+      };
+
+      setRecognitionObj(rec);
+    }
+  }, []);
 
   const handleSaveName = (e: React.FormEvent) => {
     e.preventDefault();
@@ -30,21 +91,190 @@ export default function Settings({
 
   const checkApiHealth = async () => {
     setHealthStatus("testing");
-    setHealthMessage("Pinging server cluster health endpoint...");
+    setHealthMessage("Pinging node server health verify endpoint...");
+    const start = performance.now();
     try {
       const res = await fetch("/api/health");
+      const end = performance.now();
       if (!res.ok) throw new Error(`HTTP status error: ${res.status}`);
       const data = await res.json();
       if (data.status === "ok") {
         setHealthStatus("ok");
-        setHealthMessage("Success! Server is online and receiving requests.");
+        setLatency(Math.round(end - start));
+        setHealthMessage("Google AI Studio connection proxy established successfully! Gemini API is live.");
       } else {
-        throw new Error("Invalid status returned from host node.");
+        throw new Error("Invalid status payload returned from active node service.");
       }
     } catch (err: any) {
       console.error(err);
       setHealthStatus("error");
+      setLatency(null);
       setHealthMessage(err.message || "Endpoint host responded with severe fault. Check environment variables.");
+    }
+  };
+
+  // Export tasks as JSON
+  const handleExportTasks = () => {
+    const savedTasks = localStorage.getItem("nudge_tasks") || "[]";
+    const blob = new Blob([savedTasks], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `nudge_tasks_backup_${new Date().toISOString().split("T")[0]}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // Import tasks with strict validation
+  const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setImportError(null);
+    setImportSuccess(null);
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const text = event.target?.result as string;
+        const parsed = JSON.parse(text);
+
+        if (!Array.isArray(parsed)) {
+          throw new Error("File structure invalid: backup must be a list of task records.");
+        }
+
+        // Simple validation checks on items
+        const validatedTasks: Task[] = parsed.map((item: any, idx) => {
+          if (!item.title) {
+            throw new Error(`Item at position #${idx + 1} has no title defined.`);
+          }
+          return {
+            id: item.id || `task-${Math.random().toString(36).substring(2, 11)}`,
+            title: item.title,
+            details: item.details || "",
+            priority: ["low", "medium", "high"].includes(item.priority) ? item.priority : "medium",
+            deadline: item.deadline || new Date().toISOString().split("T")[0],
+            completed: !!item.completed,
+            project: item.project || "Work",
+            timeSlot: item.timeSlot || "14:30",
+            subtasks: Array.isArray(item.subtasks)
+              ? item.subtasks.map((st: any) => ({
+                  id: st.id || `sub-${Math.random().toString(36).substring(2, 11)}`,
+                  title: st.title || "Checklist Item",
+                  completed: !!st.completed,
+                }))
+              : [],
+            aiNudge: item.aiNudge || null,
+            aiBreakdownGenerated: !!item.aiBreakdownGenerated,
+          };
+        });
+
+        if (onImportTasks) {
+          if (importOverwrites) {
+            onImportTasks(validatedTasks);
+            setImportSuccess(`Restored ${validatedTasks.length} tasks successfully (database overwritten).`);
+          } else {
+            // Merge scenario with unique IDs
+            const existingTasksJson = localStorage.getItem("nudge_tasks") || "[]";
+            let localTasks: Task[] = [];
+            try {
+              localTasks = JSON.parse(existingTasksJson);
+            } catch (e) {
+              localTasks = [];
+            }
+            
+            const merged = [...localTasks];
+            let addedCount = 0;
+            validatedTasks.forEach((newT) => {
+              if (!merged.some((existing) => existing.id === newT.id)) {
+                merged.push(newT);
+                addedCount++;
+              }
+            });
+
+            onImportTasks(merged);
+            setImportSuccess(`Merged data! Added ${addedCount} new task entries (skipped ${validatedTasks.length - addedCount} duplicates).`);
+          }
+        } else {
+          // fallback direct write if prop is absent
+          localStorage.setItem("nudge_tasks", JSON.stringify(validatedTasks));
+          setImportSuccess(`Successfully stored ${validatedTasks.length} tasks locally. Please reload dashboard.`);
+        }
+      } catch (err: any) {
+        setImportError(err.message || "Failed to parse file. Ensure it is a valid format JSON exported from Nudge.");
+      }
+    };
+
+    reader.readAsText(file);
+    // clear input
+    e.target.value = "";
+  };
+
+  // Sound Sandbox test recording start
+  const handlePlaygroundMicToggle = () => {
+    if (!recognitionObj) {
+      setSpeechError("Speech recognition is not supported in this browser. Use Chrome or Safari.");
+      return;
+    }
+    setSpeechError(null);
+    setTranscript("");
+    setExtractedResult(null);
+
+    if (isListening) {
+      try {
+        recognitionObj.stop();
+      } catch (err) {
+        console.error(err);
+      }
+      setIsListening(false);
+    } else {
+      try {
+        recognitionObj.start();
+        setIsListening(true);
+      } catch (err) {
+        console.error(err);
+        setSpeechError("Microphone startup failed. Grant permissions next time.");
+      }
+    }
+  };
+
+  const handlePlaygroundExtract = async () => {
+    if (!transcript.trim()) {
+      setSpeechError("Speak or draft text first before dry-running intelligent extraction.");
+      return;
+    }
+
+    if (isListening) {
+      try {
+        recognitionObj.stop();
+      } catch (err) {}
+      setIsListening(false);
+    }
+
+    setIsExtracting(true);
+    setSpeechError(null);
+    setExtractedResult(null);
+
+    try {
+      const response = await fetch("/api/gemini/extract-task", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          speechText: transcript,
+          currentDate: new Date().toISOString(),
+        }),
+      });
+
+      if (!response.ok) throw new Error("Voice proxy service extraction failed.");
+      const data = await response.json();
+      setExtractedResult(data);
+    } catch (e: any) {
+      console.error(e);
+      setSpeechError("Proxy parsing error. Check if server and keys are set up.");
+    } finally {
+      setIsExtracting(false);
     }
   };
 
@@ -52,35 +282,40 @@ export default function Settings({
     <div className="w-full space-y-6 animate-fade-in text-left pb-32 max-w-2xl mx-auto">
       {/* Header bar */}
       <section className="space-y-1 border-b border-slate-200 pb-4">
-        <h2 className="font-headline text-xl sm:text-2xl font-black text-slate-800 uppercase tracking-tight">
+        <h2 className="font-headline text-xl sm:text-2xl font-black text-slate-800 uppercase tracking-tight flex items-center gap-2">
+          <span className="material-symbols-outlined text-[26px]">tune</span>
           Settings & Diagnostics
         </h2>
         <p className="text-slate-400 text-xs font-mono uppercase">
-          Configure the active workspace variables.
+          Customize credentials, export backups, and test live AI integration layers.
         </p>
       </section>
 
-      {/* User Customization */}
+      {/* User Customization Card */}
       <section className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm space-y-4">
-        <h3 className="font-headline text-sm font-bold uppercase text-slate-800 tracking-wider">
-          1. Identity Configuration
-        </h3>
+        <div className="flex items-center gap-2 text-slate-800">
+          <span className="material-symbols-outlined text-lg">person</span>
+          <h3 className="font-headline text-sm font-bold uppercase tracking-wider">
+            1. Identity Configuration
+          </h3>
+        </div>
+        <p className="text-xs text-slate-500 font-body leading-relaxed">
+          Change your nickname below. Nudge will use this name to address you during personalized urgent warnings and daily schedule briefings.
+        </p>
         <form onSubmit={handleSaveName} className="space-y-3">
-          <label className="block font-mono text-[10px] text-slate-400 font-bold uppercase tracking-wider" htmlFor="username-field">
-            Display User Name
-          </label>
-          <div className="flex gap-2">
+          <div className="flex gap-2 max-w-md">
             <input
               id="username-field"
               type="text"
               required
               value={nameInput}
               onChange={(e) => setNameInput(e.target.value)}
-              className="bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-700 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-black/5 focus:border-black w-full max-w-[280px]"
+              className="bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-700 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-black/5 focus:border-black w-full"
+              placeholder="e.g. Alex"
             />
             <button
               type="submit"
-              className="bg-slate-900 text-white font-mono text-xs uppercase px-4 py-2 font-bold rounded-lg cursor-pointer hover:bg-slate-800 active:scale-95 transition-all shadow-sm"
+              className="bg-slate-900 text-white font-mono text-xs uppercase px-4 py-2 font-bold rounded-lg cursor-pointer hover:bg-slate-800 active:scale-95 transition-all shadow-sm flex-shrink-0"
             >
               Update ID
             </button>
@@ -93,56 +328,182 @@ export default function Settings({
         </form>
       </section>
 
-      {/* API Health & Integration Status */}
+      {/* Voice Sandbox Sandbox Playground Card */}
       <section className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm space-y-4">
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <h3 className="font-headline text-sm font-bold uppercase text-slate-800 tracking-wider">
-            2. Gemini Agent Integration
-          </h3>
-          <span className="font-mono text-[9px] text-slate-400 border border-slate-200 rounded bg-slate-50 px-2 py-0.5">
-            Alias: gemini-3.5-flash
+        <div className="flex items-center justify-between flex-wrap gap-2 text-slate-800">
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-lg">settings_voice</span>
+            <h3 className="font-headline text-sm font-bold uppercase tracking-wider">
+              2. AI Voice Pipeline Playground
+            </h3>
+          </div>
+          <span className="text-[10px] font-mono border px-1.5 py-0.5 rounded uppercase font-bold text-slate-400 bg-slate-50">
+            Sandbox Sandbox
           </span>
         </div>
-
-        <p className="font-body text-xs text-slate-500 leading-relaxed">
-          AI breakdown generation and smart urgent notifications are handled securely server-side. Your secrets and API credentials reside strictly in your private configuration.
+        <p className="text-xs text-slate-500 font-body leading-relaxed">
+          Test your browser's native speech recognition pipeline right here! Real-time voice inputs will map into exact deadlines and dates through Gemini's semantic model.
         </p>
 
-        <div className="bg-slate-50 border border-slate-150 rounded-xl p-4 space-y-3">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <div className="flex items-center gap-2">
-              <div className={`w-2.5 h-2.5 rounded-full ${
-                healthStatus === "ok" ? "bg-black animate-pulse" : (healthStatus === "error" ? "bg-zinc-400 animate-pulse border border-zinc-500" : "bg-neutral-300")
-              }`} />
-              <span className="font-mono text-[10px] uppercase tracking-wider text-slate-700 font-bold">
-                Integration Health: {healthStatus.toUpperCase()}
-              </span>
-            </div>
+        <div className="space-y-3 pt-1">
+          <div className="flex flex-wrap gap-2">
+            {/* Record toggling button */}
             <button
-              onClick={checkApiHealth}
-              disabled={healthStatus === "testing"}
-              className="px-3 py-1.5 font-mono text-[10px] uppercase font-bold border border-slate-200 rounded-lg bg-white text-slate-700 shadow-sm cursor-pointer hover:bg-slate-550 disabled:opacity-45"
+              onClick={handlePlaygroundMicToggle}
+              className={`flex items-center gap-1.5 px-3 py-2 font-mono text-xs uppercase font-bold border rounded-lg transition-all cursor-pointer ${
+                isListening
+                  ? "bg-red-500/10 border-red-500/30 text-red-500 animate-pulse"
+                  : "bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700"
+              }`}
             >
-              Run Diagnostics
+              <span className="material-symbols-outlined text-base">
+                {isListening ? "stop_circle" : "mic"}
+              </span>
+              {isListening ? "Stop Test Capture" : "Test Mic Signal"}
+            </button>
+
+            {/* AI dryrun extraction */}
+            <button
+              onClick={handlePlaygroundExtract}
+              disabled={isExtracting || !transcript.trim()}
+              className="flex items-center gap-1.5 px-3 py-2 bg-black text-white font-mono text-xs uppercase font-bold border border-black rounded-lg hover:bg-zinc-800 transition-all cursor-pointer disabled:opacity-40"
+            >
+              <span className="material-symbols-outlined text-base">auto_awesome</span>
+              {isExtracting ? "Parsing..." : "Extract Dry-Run"}
             </button>
           </div>
-          {healthMessage && (
-            <p className="font-mono text-xs text-slate-600 uppercase break-words bg-white border border-slate-200 rounded p-2.5 border-l-2 border-l-black">
-              &gt; {healthMessage}
+
+          {/* Test Status transcript block */}
+          <div className="bg-slate-50 border border-slate-150 rounded-lg p-3 space-y-2">
+            <span className="block font-mono text-[9px] font-semibold text-slate-400 uppercase">
+              Transcription Stream Output
+            </span>
+            {transcript ? (
+              <p className="text-slate-800 text-xs font-mono break-words">
+                "{transcript}"
+              </p>
+            ) : (
+              <p className="text-slate-400 text-xs italic font-body">
+                {isListening ? "Listening closely... speak a task (e.g. 'Gym workout tomorrow evening 6pm')" : "Mic signal inactive. Say details to test."}
+              </p>
+            )}
+          </div>
+
+          {speechError && (
+            <p className="text-red-500 text-xs font-mono uppercase bg-red-50 border border-red-100 p-2.5 rounded-lg flex items-center gap-1.5">
+              <span className="material-symbols-outlined text-base">error</span>
+              {speechError}
             </p>
           )}
-        </div>
 
-        <div className="text-[10px] text-slate-400 font-mono space-y-1 uppercase leading-snug">
-          <p>No keys or passwords need to be entered directly in this form.</p>
-          <p>If you encounters API key issues, confirm that the <strong className="text-slate-600 font-bold">GEMINI_API_KEY</strong> is loaded inside the <strong className="text-slate-600 font-bold">Settings &gt; Secrets</strong> panel inside your workspace.</p>
+          {/* Extracted JSON sandbox representation */}
+          {extractedResult && (
+            <div className="bg-zinc-950 text-emerald-430 rounded-xl p-3 border border-zinc-900 space-y-2 mt-2">
+              <div className="flex justify-between items-center text-zinc-500 font-mono text-[9px] uppercase border-b border-zinc-800 pb-1.5">
+                <span>Gemini API Structured Response Payload</span>
+                <span className="text-emerald-400 font-semibold flex items-center gap-0.5">
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                  Resolved
+                </span>
+              </div>
+              <pre className="text-[11px] font-mono leading-relaxed overflow-x-auto text-lime-400 bg-zinc-950 p-1">
+                {JSON.stringify(extractedResult, null, 2)}
+              </pre>
+            </div>
+          )}
         </div>
       </section>
 
-      {/* App Cache controls */}
+      {/* Task Backup & Portability Storage Card */}
+      <section className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm space-y-4">
+        <div className="flex items-center gap-2 text-slate-800">
+          <span className="material-symbols-outlined text-lg">inventory_2</span>
+          <h3 className="font-headline text-sm font-bold uppercase tracking-wider">
+            3. Task Portability & Cloudless Backups
+          </h3>
+        </div>
+        <p className="text-xs text-slate-500 font-body leading-relaxed">
+          Since Nudge behaves local-first to respect privacy, you can export your task list database block as a local file or upload archives to migrate your list seamlessly across browsers.
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+          {/* Export Box */}
+          <div className="border border-slate-150 rounded-xl p-4 bg-slate-50 flex flex-col justify-between space-y-3">
+            <div>
+              <span className="font-mono text-[9px] text-slate-400 uppercase font-bold tracking-wider">File Backup</span>
+              <h4 className="font-bold text-xs uppercase text-slate-800 mt-0.5">Export Task Database</h4>
+              <p className="text-[11px] text-slate-500 font-body leading-relaxed mt-1">
+                Download a clean JSON archive containing your active tasks, subtask status lists, and details.
+              </p>
+            </div>
+            <button
+              onClick={handleExportTasks}
+              className="w-full flex items-center justify-center gap-1.5 py-2 px-3 bg-slate-900 text-white hover:bg-slate-800 rounded-lg font-mono text-xs uppercase font-bold transition shadow-sm cursor-pointer"
+            >
+              <span className="material-symbols-outlined text-base">download</span>
+              Export Backup JSON
+            </button>
+          </div>
+
+          {/* Import Box */}
+          <div className="border border-slate-150 rounded-xl p-4 bg-slate-50 flex flex-col justify-between space-y-3">
+            <div>
+              <span className="font-mono text-[9px] text-slate-400 uppercase font-bold tracking-wider">Restore Database</span>
+              <h4 className="font-bold text-xs uppercase text-slate-800 mt-0.5">Import Task Archive</h4>
+              <p className="text-[11px] text-slate-500 font-body leading-relaxed mt-1">
+                Upload a processed task JSON file to merge or overwrite into browser storage instantly.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              {/* Overwrite Toggle options */}
+              <div className="flex items-center gap-2 select-none">
+                <input
+                  type="checkbox"
+                  id="import-overwrite"
+                  checked={importOverwrites}
+                  onChange={(e) => setImportOverwrites(e.target.checked)}
+                  className="rounded border-slate-350 bg-white"
+                />
+                <label htmlFor="import-overwrite" className="font-mono text-[10px] uppercase font-bold text-slate-600 cursor-pointer">
+                  Overwrite local tasks completely
+                </label>
+              </div>
+
+              {/* Upload Input Button */}
+              <label className="w-full flex items-center justify-center gap-1.5 py-2 px-3 border border-dashed border-slate-300 hover:border-slate-400 hover:bg-slate-100 rounded-lg font-mono text-xs uppercase font-bold transition cursor-pointer text-slate-700">
+                <span className="material-symbols-outlined text-base">cloud_upload</span>
+                Upload JSON
+                <input
+                  type="file"
+                  accept=".json"
+                  onChange={handleImportFile}
+                  className="hidden"
+                />
+              </label>
+            </div>
+          </div>
+        </div>
+
+        {importError && (
+          <p className="text-red-500 text-xs font-mono uppercase bg-red-50 border border-red-100 p-2.5 rounded-lg flex items-center gap-1.5">
+            <span className="material-symbols-outlined text-base">error</span>
+            {importError}
+          </p>
+        )}
+
+        {importSuccess && (
+          <p className="text-emerald-700 text-xs font-mono uppercase bg-emerald-50 border border-emerald-100 p-2.5 rounded-lg flex items-center gap-1.5">
+            <span className="material-symbols-outlined text-base">task_alt</span>
+            {importSuccess}
+          </p>
+        )}
+      </section>
+
+      {/* Dangerous Wipe controls */}
       <section className="space-y-4">
         <h3 className="font-headline text-sm font-bold uppercase text-slate-500 tracking-wider">
-          3. Workspace Cache Controls
+          4. Dangerous Cache PURGE
         </h3>
         <p className="font-body text-xs text-slate-500">
           The application state resides locally inside current browser storage block (<strong className="text-slate-700">localStorage</strong>). There are currently <strong className="text-slate-700">{totalTasksCount} task item(s)</strong> parsed.
@@ -152,9 +513,9 @@ export default function Settings({
           {/* Wipe Cache */}
           <div className="p-4 bg-zinc-100 border border-zinc-200 rounded-xl space-y-3 flex flex-col justify-between shadow-sm">
             <div>
-              <p className="font-mono text-[10px] text-zinc-600 uppercase font-bold">Dangerous Actions</p>
-              <p className="text-xs text-zinc-800 leading-relaxed font-body mt-1">
-                Destructively purges the local browser cache and clears all task records. Cleans the slate entirely.
+              <p className="font-mono text-[10px] text-zinc-650 uppercase font-bold">Dangerous Actions</p>
+              <p className="text-xs text-zinc-850 leading-relaxed font-body mt-1">
+                Destructively purges the local browser cache and clears all task records. Cleans the slate entirely. This action is irreversible.
               </p>
             </div>
             {showWipeConfirm ? (
@@ -166,13 +527,13 @@ export default function Settings({
                       onClearAllTasks();
                       setShowWipeConfirm(false);
                     }}
-                    className="flex-1 bg-black hover:bg-zinc-800 text-white font-mono text-[11px] uppercase font-bold py-2 rounded-lg transition border border-black"
+                    className="flex-1 bg-black hover:bg-zinc-800 text-white font-mono text-[11px] uppercase font-bold py-2 rounded-lg transition border border-black cursor-pointer"
                   >
                     WIPE ALL
                   </button>
                   <button
                     onClick={() => setShowWipeConfirm(false)}
-                    className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-mono text-[11px] uppercase font-bold py-2 rounded-lg transition"
+                    className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-mono text-[11px] uppercase font-bold py-2 rounded-lg transition cursor-pointer"
                   >
                     Keep
                   </button>

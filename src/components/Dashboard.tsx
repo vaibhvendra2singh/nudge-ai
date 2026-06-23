@@ -1,6 +1,7 @@
 import React from "react";
 import { Task } from "../types";
 import { getTaskUrgencyDetails } from "../utils";
+import { CalendarEvent, checkDeadlineConflicts } from "../calendarService";
 
 interface DashboardProps {
   tasks: Task[];
@@ -8,6 +9,13 @@ interface DashboardProps {
   onSelectTask: (id: string) => void;
   onNavigateToTab: (tab: "dashboard" | "add_task" | "settings") => void;
   userName: string;
+  gcalEvents?: CalendarEvent[];
+  gcalConnected?: boolean;
+  gcalUserEmail?: string | null;
+  onConnectGcal?: () => void;
+  onDisconnectGcal?: () => void;
+  gcalLoadingEvents?: boolean;
+  calendarError?: string | null;
 }
 
 export default function Dashboard({
@@ -16,6 +24,13 @@ export default function Dashboard({
   onSelectTask,
   onNavigateToTab,
   userName = "Alex",
+  gcalEvents = [],
+  gcalConnected = false,
+  gcalUserEmail = null,
+  onConnectGcal = () => {},
+  onDisconnectGcal = () => {},
+  gcalLoadingEvents = false,
+  calendarError = null,
 }: DashboardProps) {
   // Map titles to icons
   const getTaskIconName = (title: string, project: string): string => {
@@ -136,6 +151,75 @@ export default function Dashboard({
   const futureTasks = categorizedTasks.filter(item => !item.task.completed && item.category === "future");
   const completedTasks = categorizedTasks.filter(item => item.task.completed);
 
+  // Run conflict checks across active (uncompleted) tasks
+  const activeUncompletedTasks = tasks.filter(t => !t.completed);
+  const detectedConflictsList: { task: Task; event: CalendarEvent; type: "direct" | "nearby" }[] = [];
+  
+  if (gcalConnected && gcalEvents.length > 0) {
+    activeUncompletedTasks.forEach(task => {
+      if (task.deadline) {
+        const conflicts = checkDeadlineConflicts(task.deadline, task.timeSlot, gcalEvents);
+        conflicts.forEach(c => {
+          detectedConflictsList.push({
+            task,
+            event: c.event,
+            type: c.type
+          });
+        });
+      }
+    });
+  }
+
+  // Calculate smart day suggestion
+  const getSmartFreeDaySuggestion = (eventsList: CalendarEvent[]) => {
+    const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    
+    // Let's count events per day for the next 7 days
+    const dailyEventCounts: { [key: string]: { count: number; dateStr: string; name: string } } = {};
+    
+    for (let i = 0; i < 7; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() + i + 1); // starting tomorrow
+      const dayStr = d.toISOString().split("T")[0];
+      const dayName = daysOfWeek[d.getDay()];
+      dailyEventCounts[dayStr] = { count: 0, dateStr: dayStr, name: dayName };
+    }
+    
+    eventsList.forEach(ev => {
+      const startStr = ev.start.dateTime || ev.start.date;
+      if (!startStr) return;
+      const evDayStr = startStr.split("T")[0];
+      if (dailyEventCounts[evDayStr]) {
+        dailyEventCounts[evDayStr].count++;
+      }
+    });
+    
+    // Find the day with the lowest event count
+    const sortedDays = Object.values(dailyEventCounts).sort((a, b) => {
+      const aIsWeekend = a.name === "Saturday" || a.name === "Sunday";
+      const bIsWeekend = b.name === "Saturday" || b.name === "Sunday";
+      if (a.count !== b.count) {
+        return a.count - b.count;
+      }
+      if (aIsWeekend && !bIsWeekend) return 1;
+      if (!aIsWeekend && bIsWeekend) return -1;
+      return 0;
+    });
+    
+    const suggestedDay = sortedDays[0];
+    if (!suggestedDay) return "Friday afternoon";
+    
+    if (suggestedDay.count === 0) {
+      return `${suggestedDay.name} is completely wide-open on your schedule. Optimal for new tasks!`;
+    } else {
+      return `${suggestedDay.name} is your lightest upcoming day with only ${suggestedDay.count} events.`;
+    }
+  };
+
+  const smartDaySuggestion = gcalConnected && gcalEvents.length > 0
+    ? getSmartFreeDaySuggestion(gcalEvents)
+    : null;
+
   return (
     <div className="w-full">
       {/* Greeting Section */}
@@ -164,6 +248,181 @@ export default function Dashboard({
         </div>
       </div>
 
+      {/* GOOGLE CALENDAR ADVISOR (Active Bridge Sync) */}
+      <section className="mb-8 text-left animate-fade-in" id="google-calendar-sync-widget">
+        <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-3 mb-4 border-b border-slate-100">
+            <div className="flex items-center gap-2.5">
+              <span className="material-symbols-outlined text-slate-700 bg-slate-100 p-1.5 rounded-lg text-lg">calendar_today</span>
+              <div>
+                <h3 className="font-headline text-xs font-black text-slate-800 uppercase tracking-widest leading-none">
+                  Google Calendar Sync
+                </h3>
+                <p className="font-mono text-[9px] uppercase tracking-wider text-slate-400 mt-1">
+                  {gcalConnected ? `Secure workspace link with ${gcalUserEmail || 'alex@gmail.com'}` : "Check active conflicts & find open focus blocks"}
+                </p>
+              </div>
+            </div>
+
+            {gcalConnected ? (
+              <button
+                onClick={onDisconnectGcal}
+                className="font-mono text-[9px] uppercase font-bold tracking-wider text-red-500 hover:text-white px-2.5 py-1.5 border border-red-200 hover:bg-red-500 rounded-md transition-all cursor-pointer self-start sm:self-auto active:scale-95"
+              >
+                Disconnect Calendar
+              </button>
+            ) : (
+              <button
+                onClick={onConnectGcal}
+                className="flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg shadow-xs transition-all text-[10px] font-mono uppercase font-bold cursor-pointer active:scale-95"
+              >
+                <svg className="w-3.5 h-3.5" viewBox="0 0 48 48">
+                  <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+                  <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+                  <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+                  <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
+                </svg>
+                <span>Authorize Calendar</span>
+              </button>
+            )}
+          </div>
+
+          {calendarError && (
+            <div className="bg-red-50 text-red-700 text-xs border border-red-100 p-3 rounded-lg mb-4 flex items-start gap-2 animate-shake">
+              <span className="material-symbols-outlined text-sm font-bold mt-0.5">error_outline</span>
+              <div>
+                <p className="font-bold uppercase tracking-wider text-[9px] font-mono">Sync Blocked</p>
+                <p className="mt-0.5 leading-relaxed font-semibold">{calendarError}</p>
+                <button 
+                  onClick={onConnectGcal}
+                  className="font-mono text-[9px] uppercase underline mt-1.5 font-bold cursor-pointer block hover:text-red-900 animate-pulse"
+                >
+                  Click to re-authorize Google Calendar
+                </button>
+              </div>
+            </div>
+          )}
+
+          {gcalLoadingEvents ? (
+            <div className="flex items-center justify-center gap-2 py-6 text-slate-500 text-xs font-mono uppercase tracking-wider">
+              <div className="w-4 h-4 border-2 border-slate-600 border-t-transparent animate-spin rounded-full"></div>
+              <span>Securing timeline handshake...</span>
+            </div>
+          ) : gcalConnected ? (
+            <div className="space-y-4 font-sans text-slate-800">
+              {/* Conflicts Alerts Banner */}
+              {detectedConflictsList.length > 0 ? (
+                <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-4 text-left">
+                  <div className="flex items-center gap-1.5 text-amber-800 mb-2 font-bold font-headline text-xs uppercase tracking-wider">
+                    <span className="material-symbols-outlined text-base animate-bounce">warning</span>
+                    <span>{detectedConflictsList.length} Scheduling Flag Conflicts</span>
+                  </div>
+                  <div className="space-y-2 max-h-[160px] overflow-y-auto">
+                    {detectedConflictsList.map(({ task, event }) => {
+                      const startStr = event.start.dateTime || event.start.date || "";
+                      const displayTime = event.start.dateTime 
+                        ? new Date(startStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+                        : "All-Day";
+                      return (
+                        <div key={`${task.id}-${event.id}`} className="bg-white border border-amber-200/60 p-2.5 rounded-lg flex items-center justify-between text-xs gap-3">
+                          <div className="truncate text-left">
+                            <span className="font-bold text-slate-800 uppercase block sm:inline mr-1">{task.title}</span>
+                            <span className="text-amber-700 italic">overlaps with '{event.summary || "Busy Slot"}'</span>
+                          </div>
+                          <div className="font-mono text-[10px] font-bold text-amber-850 whitespace-nowrap">
+                            {task.deadline} • {task.timeSlot || displayTime}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-emerald-50/20 border border-emerald-100 rounded-xl p-3 flex items-center gap-2.5 text-xs text-emerald-800">
+                  <span className="material-symbols-outlined text-emerald-600 font-bold">verified</span>
+                  <p className="font-semibold text-left">
+                    No active scheduling collisions. All task deadlines align with your Google Calendar events.
+                  </p>
+                </div>
+              )}
+
+              {/* Suggestions / Smarter Deadline Adviser */}
+              {smartDaySuggestion && (
+                <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="space-y-0.5 text-left">
+                    <span className="font-mono text-[9px] font-bold text-slate-500 uppercase tracking-widest block font-sans">Smarter Deadlines Advisor</span>
+                    <p className="text-sm font-bold text-slate-800 uppercase tracking-tight">
+                      {smartDaySuggestion}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => onNavigateToTab("add_task")}
+                    className="flex-shrink-0 font-mono text-[9px] uppercase font-bold tracking-wider px-3 py-1.5 bg-black hover:bg-slate-800 text-white rounded-lg cursor-pointer self-start sm:self-auto active:scale-95 transition-all shadow-sm"
+                  >
+                    Schedule Focus
+                  </button>
+                </div>
+              )}
+
+              {/* Interactive Calendar Feed Strip */}
+              <div className="pt-2">
+                <span className="font-mono text-[9px] font-bold text-slate-400 uppercase tracking-widest block mb-2 text-left">Upcoming Commitments (7 days)</span>
+                {gcalEvents.length === 0 ? (
+                  <p className="font-mono text-center text-xs py-4 text-slate-400 uppercase">Your Calendar is completely empty for the next 7 days.</p>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {gcalEvents.slice(0, 4).map(event => {
+                      const startStr = event.start.dateTime || event.start.date || "";
+                      const start = new Date(startStr);
+                      const dateDisplay = start.toLocaleDateString([], { month: "short", day: "numeric" });
+                      const timeDisplay = event.start.dateTime
+                        ? start.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })
+                        : "All-Day";
+                        
+                      return (
+                        <div key={event.id} className="p-3 bg-slate-50 hover:bg-slate-100 border border-slate-200/50 rounded-lg flex items-center justify-between gap-3 text-left transition-all">
+                          <div className="truncate">
+                            <p className="font-headline text-xs font-bold text-slate-800 truncate uppercase mt-0.5">{event.summary || "Busy Block"}</p>
+                            <p className="font-mono text-[9px] text-slate-400 uppercase mt-0.5">{dateDisplay} • {timeDisplay}</p>
+                          </div>
+                          <span className="text-slate-350 select-none material-symbols-outlined text-sm">schedule</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="text-center py-6 px-4 space-y-3.5">
+              <div className="mx-auto w-12 h-12 bg-slate-50 border border-slate-200 rounded-full flex items-center justify-center text-slate-400">
+                <span className="material-symbols-outlined text-2xl">sync_lock</span>
+              </div>
+              <div className="space-y-1">
+                <h4 className="font-headline text-xs font-bold text-slate-700 uppercase tracking-wider">Sync Google Calendar commitments</h4>
+                <p className="font-body text-slate-500 text-xs max-w-sm mx-auto leading-relaxed">
+                  Avoid planning overlapping task deadlines. Direct Google Calendar sync checks your availability dynamically, indicates collisions, and computes optimal times.
+                </p>
+              </div>
+              <div className="flex justify-center pt-1">
+                <button
+                  onClick={onConnectGcal}
+                  className="flex items-center gap-2 px-4 py-2.5 bg-black hover:bg-zinc-900 border border-zinc-800 text-white rounded-lg shadow-sm transition-all text-xs font-mono uppercase font-bold cursor-pointer active:scale-95"
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 48 48">
+                    <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+                    <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+                    <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+                    <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
+                  </svg>
+                  <span>Connect Google Calendar</span>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </section>
+
       {/* NEEDS ACTION NOW HIGHLIGHT SECTION */}
       {needsActionTasks.length > 0 && (
         <section className="mb-8 font-sans animate-fade-in" id="section-needs-action">
@@ -175,9 +434,6 @@ export default function Dashboard({
               <h2 className="font-headline text-xs font-black text-red-600 uppercase tracking-widest">
                 Needs Action Now
               </h2>
-              <span className="bg-red-100 text-red-800 font-mono text-[9px] font-bold px-1.5 py-0.5 rounded border border-red-200">
-                IMMEDIATE CHECKS REQUIRED
-              </span>
             </div>
 
             {isSummaryLoading ? (
@@ -225,7 +481,7 @@ export default function Dashboard({
                           {task.title}
                         </h4>
                       </div>
-                      <div className="flex-shrink-0 flex items-center gap-1 font-mono text-[9px] text-red-700 font-bold bg-red-50/50 px-2 py-0.5 rounded border border-red-100">
+                      <div className="flex-shrink-0 flex items-center gap-1 font-mono text-[10px] text-red-700 font-bold">
                         <span className="material-symbols-outlined text-[13px] font-bold">schedule</span>
                         <span>{timeLabel}</span>
                       </div>
@@ -256,7 +512,7 @@ export default function Dashboard({
                           {task.title}
                         </h4>
                       </div>
-                      <div className="flex-shrink-0 flex items-center gap-1 font-mono text-[9px] text-red-700 font-bold bg-red-50/50 px-2 py-0.5 rounded border border-red-100">
+                      <div className="flex-shrink-0 flex items-center gap-1 font-mono text-[10px] text-red-700 font-bold">
                         <span className="material-symbols-outlined text-[13px] font-bold">schedule</span>
                         <span>{timeLabel}</span>
                       </div>
@@ -271,13 +527,10 @@ export default function Dashboard({
 
       {/* URGENT SECTION */}
       <section className="mb-8 font-sans" id="section-urgent">
-        <div className="flex items-center justify-between mb-4">
+        <div className="mb-4">
           <h2 className="font-headline text-sm font-bold text-slate-500 uppercase tracking-widest">
             Urgent Tasks
           </h2>
-          <span className="badge-urgent text-[10px] uppercase font-bold px-2 py-0.5 rounded-md">
-            DUE TODAY
-          </span>
         </div>
 
         {urgentTasks.length === 0 ? (
@@ -306,16 +559,10 @@ export default function Dashboard({
                   className="task-card bg-white border border-slate-200 rounded-xl p-4 flex flex-col justify-between min-h-[150px] cursor-pointer hover:border-black hover:shadow-md transition-all relative group"
                 >
                   <div>
-                    <div className="flex justify-between items-start mb-2">
-                      <span className="bg-slate-100 text-slate-600 font-mono text-[9px] uppercase tracking-wider px-2 py-0.5 rounded border border-slate-200 font-bold">
+                    <div className="mb-2">
+                      <span className="text-slate-500 font-mono text-[10px] uppercase tracking-wider font-bold">
                         {task.project || "Task"}
                       </span>
-                      {hasNoCompletedSubtasks && (
-                        <span 
-                          title="Urgent alert trigger: Due in 24h with no completed subtasks"
-                          className="w-2.5 h-2.5 bg-black rounded-full animate-ping"
-                        />
-                      )}
                     </div>
                     <h3 className="font-headline text-base font-bold text-slate-800 uppercase tracking-tight line-clamp-2 leading-snug">
                       {task.title}
@@ -383,13 +630,12 @@ export default function Dashboard({
                     <h3 className="font-headline text-sm sm:text-base font-bold text-slate-800 uppercase tracking-tight truncate">
                       {task.title}
                     </h3>
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className="font-mono text-[9px] text-slate-400 uppercase font-bold">
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className="font-mono text-[10px] text-slate-400 uppercase font-bold">
                         {task.project || "Task"}
                       </span>
-                      <span className="w-1 h-1 bg-slate-300 rounded-full inline-block"></span>
-                      <span className="badge-warning text-[9px] uppercase font-bold px-1.5 py-0.2 rounded-md">
-                        {timeLabel}
+                      <span className="font-mono text-[10px] text-slate-400 font-bold uppercase">
+                        • {timeLabel}
                       </span>
                     </div>
                   </div>
@@ -448,13 +694,12 @@ export default function Dashboard({
                     <h3 className="font-headline text-sm sm:text-base font-medium text-slate-700 uppercase tracking-tight truncate">
                       {task.title}
                     </h3>
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className="font-mono text-[9px] text-slate-400 uppercase">
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className="font-mono text-[10px] text-slate-400 uppercase">
                         {task.project || "Task"}
                       </span>
-                      <span className="w-1 h-1 bg-slate-300 rounded-full inline-block"></span>
-                      <span className="badge-normal text-[9px] uppercase font-bold px-1.5 py-0.2 rounded-md">
-                        {timeLabel}
+                      <span className="font-mono text-[10px] text-slate-400 font-bold uppercase">
+                        • {timeLabel}
                       </span>
                     </div>
                   </div>

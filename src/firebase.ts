@@ -2,7 +2,10 @@ import { initializeApp } from "firebase/app";
 import { 
   getAuth,
   signInAnonymously,
-  onAuthStateChanged
+  onAuthStateChanged,
+  signInWithPopup,
+  GoogleAuthProvider,
+  User
 } from "firebase/auth";
 import { 
   initializeFirestore,
@@ -13,7 +16,8 @@ import {
   setDoc,
   deleteDoc,
   query,
-  where
+  where,
+  enableIndexedDbPersistence
 } from "firebase/firestore";
 import { Task } from "./types";
 
@@ -31,8 +35,75 @@ const app = initializeApp(firebaseConfig);
 // Export Auth instance
 export const auth = getAuth(app);
 
+// Configure Google Provider for Google Calendar
+const provider = new GoogleAuthProvider();
+provider.addScope("https://www.googleapis.com/auth/calendar.readonly");
+
+let isSigningIn = false;
+let cachedAccessToken: string | null = null;
+
+export const initAuth = (
+  onAuthSuccess?: (user: User, token: string) => void,
+  onAuthFailure?: () => void
+) => {
+  return onAuthStateChanged(auth, async (user) => {
+    if (user) {
+      if (cachedAccessToken) {
+        if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
+      } else {
+        if (onAuthFailure) onAuthFailure();
+      }
+    } else {
+      cachedAccessToken = null;
+      if (onAuthFailure) onAuthFailure();
+    }
+  });
+};
+
+export const googleSignIn = async (): Promise<{ user: User; accessToken: string } | null> => {
+  try {
+    isSigningIn = true;
+    const result = await signInWithPopup(auth, provider);
+    const credential = GoogleAuthProvider.credentialFromResult(result);
+    if (!credential?.accessToken) {
+      throw new Error("Failed to get Google Calendar access token");
+    }
+    cachedAccessToken = credential.accessToken;
+    localStorage.setItem("nudge_gcal_connected", "true");
+    return { user: result.user, accessToken: cachedAccessToken };
+  } catch (error) {
+    console.error("Google login failed:", error);
+    throw error;
+  } finally {
+    isSigningIn = false;
+  }
+};
+
+export const logoutGoogle = async () => {
+  await auth.signOut();
+  cachedAccessToken = null;
+  localStorage.removeItem("nudge_gcal_connected");
+};
+
+export const getAccessToken = (): string | null => {
+  return cachedAccessToken;
+};
+
 // Initialize Firestore specifying our database ID as the third argument
 export const db = initializeFirestore(app, {}, "ai-studio-4c209ca4-f466-4b0f-8e6f-6b8aa9dfeecd");
+
+// Enable offline storage caching for persistent offline edits
+if (typeof window !== "undefined") {
+  enableIndexedDbPersistence(db).catch((err) => {
+    if (err.code === "failed-precondition") {
+      console.warn("Firestore offline persistence failed: Multiple tabs open.");
+    } else if (err.code === "unimplemented") {
+      console.warn("Firestore offline persistence unsupported by current browser.");
+    } else {
+      console.error("Firestore offline configuration issue: ", err);
+    }
+  });
+}
 
 // Signs in user anonymously and returns user uid. Since Anonymous auth is disabled/restricted in the console, we gracefully bypass the login call and directly return a persistent local user ID. This keeps the console completely clean and prevents failed auth retries.
 export async function signInUserAnonymously(): Promise<string> {

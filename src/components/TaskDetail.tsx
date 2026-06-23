@@ -1,12 +1,15 @@
 import React, { useState, useEffect } from "react";
 import { Task, SubTask } from "../types";
 import { getTaskUrgencyDetails, downloadICSFile } from "../utils";
+import { CalendarEvent, checkDeadlineConflicts } from "../calendarService";
 
 interface TaskDetailProps {
   task: Task;
   onGoBack: () => void;
   onUpdateTask: (updatedTask: Task) => void;
   onDeleteTask: (id: string) => void;
+  gcalEvents?: CalendarEvent[];
+  gcalConnected?: boolean;
 }
 
 export default function TaskDetail({
@@ -14,6 +17,8 @@ export default function TaskDetail({
   onGoBack,
   onUpdateTask,
   onDeleteTask,
+  gcalEvents = [],
+  gcalConnected = false,
 }: TaskDetailProps) {
   const [isNudgeLoading, setIsNudgeLoading] = useState(false);
   const [isBreakdownLoading, setIsBreakdownLoading] = useState(false);
@@ -222,20 +227,21 @@ export default function TaskDetail({
       </div>
 
       {/* Task Header area */}
-      <section className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm space-y-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="bg-slate-100 border border-slate-200 text-slate-600 px-3 py-1 font-mono text-[10px] font-bold uppercase rounded-md">
-            Project: {task.project || "Task"}
-          </span>
-          {task.completed && (
-            <span className="bg-zinc-100 border border-zinc-200 text-zinc-900 px-3 py-1 font-mono text-[10px] font-bold uppercase rounded-md">
-              RESOLVED
-            </span>
-          )}
+      <section className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm space-y-2">
+        <div className="space-y-1">
+          <h2 className="font-headline text-xl sm:text-2xl font-black text-slate-800 tracking-tight uppercase leading-snug break-words">
+            {task.title}
+          </h2>
+          <div className="flex items-center gap-3 font-mono text-xs text-slate-500 uppercase font-semibold">
+            <span>Project: {task.project || "General"}</span>
+            {task.completed && (
+              <>
+                <span>•</span>
+                <span className="text-zinc-600 font-bold">Resolved</span>
+              </>
+            )}
+          </div>
         </div>
-        <h2 className="font-headline text-xl sm:text-2xl font-black text-slate-800 tracking-tight uppercase leading-snug break-words">
-          {task.title}
-        </h2>
         <p className="font-body text-slate-600 text-sm sm:text-base leading-relaxed whitespace-pre-line border-l-4 border-slate-300 pl-4 py-1">
           {task.details || "No specific details provided for this action."}
         </p>
@@ -296,12 +302,12 @@ export default function TaskDetail({
             </h3>
           </div>
           {subtasksList.length > 0 ? (
-            <span className="font-mono text-[10px] text-slate-500 bg-slate-50 border border-slate-200 px-2 py-0.5 rounded">
-              {subtasksList.length} Managed Item{subtasksList.length > 1 ? "s" : ""}
+            <span className="font-mono text-[10px] text-slate-500 uppercase font-bold tracking-wider">
+              {subtasksList.length} Step{subtasksList.length > 1 ? "s" : ""}
             </span>
           ) : (
-            <span className="font-mono text-[10px] text-slate-400 bg-slate-50 border border-slate-150 px-2 py-0.5 rounded">
-              No list built
+            <span className="font-mono text-[10px] text-slate-400 uppercase font-semibold tracking-wider">
+              Empty
             </span>
           )}
         </div>
@@ -401,6 +407,36 @@ export default function TaskDetail({
           </div>
         )}
       </section>
+
+      {/* GOOGLE CALENDAR ADVISORY CONFLICT ALERT */}
+      {gcalConnected && task.deadline && (() => {
+        const conflicts = checkDeadlineConflicts(task.deadline, task.timeSlot || "17:00", gcalEvents);
+        if (conflicts.length > 0) {
+          return (
+            <div className="mb-6 bg-amber-50/70 border border-amber-200 text-amber-800 p-4 rounded-xl flex items-start gap-3 text-left font-sans animate-fade-in shadow-xs">
+              <span className="material-symbols-outlined text-amber-700 font-bold animate-pulse mt-0.5">warning</span>
+              <div>
+                <h4 className="font-bold uppercase tracking-wider text-[9px] font-mono mb-0.5">Calendar Conflict Identified</h4>
+                <p className="text-xs font-semibold leading-relaxed">
+                  This task's target deadline overlaps with <span className="font-bold underline">{conflicts.map(c => `'${c.event.summary || "Busy Slot"}'`).join(", ")}</span> on your Google Calendar.
+                </p>
+                <p className="text-[10px] text-amber-900 mt-1.5 font-bold">
+                  Tip: Use the alternate hourly slots or consider rescheduling this task to a clear block.
+                </p>
+              </div>
+            </div>
+          );
+        } else {
+          return (
+            <div className="mb-6 bg-emerald-50/30 border border-emerald-150 text-emerald-800 p-3 rounded-xl flex items-center gap-2.5 text-left text-xs font-sans animate-fade-in">
+              <span className="material-symbols-outlined text-emerald-600 font-bold">check_circle</span>
+              <p className="font-semibold">
+                Google Calendar Checked: No scheduling conflicts for this deadline!
+              </p>
+            </div>
+          );
+        }
+      })()}
 
       {/* METADATA BLOCKS */}
       <section className="grid grid-cols-1 sm:grid-cols-2 gap-4">

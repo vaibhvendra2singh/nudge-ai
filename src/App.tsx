@@ -5,13 +5,105 @@ import Dashboard from "./components/Dashboard";
 import TaskDetail from "./components/TaskDetail";
 import AddTask from "./components/AddTask";
 import Settings from "./components/Settings";
+import Analytics from "./components/Analytics";
+import { googleSignIn, logoutGoogle, initAuth } from "./firebase";
+import { fetchUpcomingEvents, CalendarEvent } from "./calendarService";
 
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [activeTab, setActiveTab] = useState<"dashboard" | "add_task" | "settings">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "analytics" | "add_task" | "settings">("dashboard");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [userName, setUserName] = useState("Alex");
   const [showNotifications, setShowNotifications] = useState(false);
+
+  // Online/Offline tracking state
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
+
+  // Google Calendar Integration State
+  const [gcalConnected, setGcalConnected] = useState(false);
+  const [gcalEvents, setGcalEvents] = useState<CalendarEvent[]>([]);
+  const [gcalUserEmail, setGcalUserEmail] = useState<string | null>(null);
+  const [gcalLoadingEvents, setGcalLoadingEvents] = useState(false);
+  const [calendarError, setCalendarError] = useState<string | null>(null);
+
+  // Fetch upcoming timeline from user's primary calendar
+  const loadGcalEvents = async (token: string) => {
+    setGcalLoadingEvents(true);
+    setCalendarError(null);
+    try {
+      const events = await fetchUpcomingEvents(token, 10);
+      setGcalEvents(events);
+      setGcalConnected(true);
+    } catch (err: any) {
+      console.error("Error loading calendar events:", err);
+      setCalendarError("Session expired. Please reconnect Google Calendar to sync conflicts.");
+      setGcalConnected(false);
+    } finally {
+      setGcalLoadingEvents(false);
+    }
+  };
+
+  // Google Sign-In with Calendar popup
+  const handleConnectGcal = async () => {
+    try {
+      setCalendarError(null);
+      const res = await googleSignIn();
+      if (res) {
+        setGcalConnected(true);
+        setGcalUserEmail(res.user.email);
+        await loadGcalEvents(res.accessToken);
+      }
+    } catch (err: any) {
+      console.error("Google Auth login error:", err);
+      setCalendarError(err.message || "Failed to authenticate with Google Calendar.");
+    }
+  };
+
+  // Disconnect Google Calendar
+  const handleDisconnectGcal = async () => {
+    try {
+      await logoutGoogle();
+      setGcalConnected(false);
+      setGcalEvents([]);
+      setGcalUserEmail(null);
+      setCalendarError(null);
+    } catch (err) {
+      console.error("Google disconnect error:", err);
+    }
+  };
+
+  // Synchronize Google Auth tokens on mount and active sessions
+  useEffect(() => {
+    const unsubscribe = initAuth(
+      (user, token) => {
+        setGcalUserEmail(user.email);
+        loadGcalEvents(token);
+      },
+      () => {
+        if (localStorage.getItem("nudge_gcal_connected") === "true") {
+          setGcalConnected(true);
+        } else {
+          setGcalConnected(false);
+        }
+      }
+    );
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, []);
 
   // Initialize and load from local storage
   useEffect(() => {
@@ -55,9 +147,11 @@ export default function App() {
     
     const updated = tasks.map(task => {
       if (task.id === id) {
+        const nextCompleted = !task.completed;
         return {
           ...task,
-          completed: !task.completed,
+          completed: nextCompleted,
+          completedAt: nextCompleted ? new Date().toISOString().split('T')[0] : undefined,
         };
       }
       return task;
@@ -82,6 +176,9 @@ export default function App() {
           const aiNudge = updatedTask.aiNudge !== undefined ? updatedTask.aiNudge : t.aiNudge;
           const aiBreakdownGenerated = updatedTask.aiBreakdownGenerated !== undefined ? updatedTask.aiBreakdownGenerated : t.aiBreakdownGenerated;
           const completed = updatedTask.completed !== undefined ? updatedTask.completed : t.completed;
+          const completedAt = updatedTask.completed !== undefined 
+            ? (updatedTask.completed ? (updatedTask.completedAt || new Date().toISOString().split('T')[0]) : undefined)
+            : t.completedAt;
 
           return {
             ...t,
@@ -89,7 +186,8 @@ export default function App() {
             subtasks,
             aiNudge,
             aiBreakdownGenerated,
-            completed
+            completed,
+            completedAt
           };
         }
         return t;
@@ -142,7 +240,7 @@ export default function App() {
 
 
   // Safe navigation proxy
-  const handleNavigateToTab = (tab: "dashboard" | "add_task" | "settings") => {
+  const handleNavigateToTab = (tab: "dashboard" | "analytics" | "add_task" | "settings") => {
     setActiveTab(tab);
     setSelectedTaskId(null); // Clear selected item when toggling tabs
   };
@@ -175,15 +273,6 @@ export default function App() {
 
         {/* Action icons */}
         <div className="flex items-center gap-3">
-          {/* Local Active Storage Indicator */}
-          <div 
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[10px] font-mono tracking-wider uppercase font-bold select-none bg-zinc-900 border-zinc-800 text-zinc-400"
-            title="All tasks and checklists are secured automatically in your browser's persistent Local Storage."
-          >
-            <span className="material-symbols-outlined text-[13px] text-emerald-400 filter drop-shadow-[0_0_2px_rgba(52,211,153,0.5)]">database</span>
-            <span className="hidden xs:inline">Local Storage</span>
-          </div>
-
           {/* Notifications Trigger */}
           <button
             onClick={() => setShowNotifications(!showNotifications)}
@@ -191,11 +280,6 @@ export default function App() {
             className="p-2 border border-zinc-800 text-zinc-300 hover:bg-zinc-900 hover:text-white rounded-lg transition-colors relative cursor-pointer"
           >
             <span className="material-symbols-outlined text-white block text-xl">notifications</span>
-            {urgentNudgeList.length > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 bg-white text-black border-2 border-black font-semibold font-mono text-[9px] w-5 h-5 flex items-center justify-center rounded-full animate-bounce">
-                {urgentNudgeList.length}
-              </span>
-            )}
           </button>
         </div>
       </header>
@@ -235,11 +319,8 @@ export default function App() {
                     }}
                     className="group bg-slate-50 hover:bg-zinc-100 border border-zinc-200 hover:border-black p-3 rounded-lg transition-all cursor-pointer"
                   >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="bg-white text-slate-650 font-mono text-[9px] uppercase tracking-wider px-1.5 py-0.5 border border-slate-200 rounded">
-                        {task.project}
-                      </span>
-                      <span className="w-2 h-2 bg-black rounded-full animate-ping"></span>
+                    <div className="mb-1 text-slate-500 font-mono text-[10px] uppercase font-bold tracking-wider">
+                      Project: {task.project}
                     </div>
                     <p className="font-headline font-bold text-black text-sm uppercase max-w-[240px] truncate leading-tight group-hover:text-black">
                       {task.title}
@@ -269,6 +350,8 @@ export default function App() {
             onGoBack={() => setSelectedTaskId(null)}
             onUpdateTask={handleUpdateTask}
             onDeleteTask={handleDeleteTask}
+            gcalEvents={gcalEvents}
+            gcalConnected={gcalConnected}
           />
         ) : activeTab === "dashboard" ? (
           <Dashboard
@@ -277,11 +360,25 @@ export default function App() {
             onSelectTask={handleSelectTask}
             onNavigateToTab={handleNavigateToTab}
             userName={userName}
+            gcalEvents={gcalEvents}
+            gcalConnected={gcalConnected}
+            gcalUserEmail={gcalUserEmail}
+            onConnectGcal={handleConnectGcal}
+            onDisconnectGcal={handleDisconnectGcal}
+            gcalLoadingEvents={gcalLoadingEvents}
+            calendarError={calendarError}
+          />
+        ) : activeTab === "analytics" ? (
+          <Analytics
+            tasks={tasks}
+            userName={userName}
           />
         ) : activeTab === "add_task" ? (
           <AddTask
             onAddTask={handleAddTask}
             onCancel={() => setActiveTab("dashboard")}
+            gcalEvents={gcalEvents}
+            gcalConnected={gcalConnected}
           />
         ) : (
           <Settings
@@ -289,6 +386,7 @@ export default function App() {
             onUpdateUserName={saveUserNameState}
             onClearAllTasks={handleClearAllTasks}
             totalTasksCount={tasks.length}
+            onImportTasks={saveTasksState}
           />
         )}
       </main>
@@ -312,6 +410,26 @@ export default function App() {
           </span>
           <span className="font-mono text-[10px] uppercase tracking-wider mt-0.5">
             Dashboard
+          </span>
+        </button>
+
+        {/* Insights Tab */}
+        <button
+          onClick={() => handleNavigateToTab("analytics")}
+          className={`flex flex-col items-center justify-center py-1 px-4 sm:px-6 transition-all duration-150 rounded-lg cursor-pointer ${
+            activeTab === "analytics"
+              ? "bg-zinc-900 text-white font-bold"
+              : "text-zinc-400 hover:text-white hover:bg-zinc-900"
+          }`}
+        >
+          <span 
+            className="material-symbols-outlined text-[20px] sm:text-[22px]"
+            style={{ fontVariationSettings: activeTab === "analytics" ? "'FILL' 1" : "'FILL' 0" }}
+          >
+            insights
+          </span>
+          <span className="font-mono text-[10px] uppercase tracking-wider mt-0.5">
+            Insights
           </span>
         </button>
 

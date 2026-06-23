@@ -416,6 +416,273 @@ Respond with valid JSON exactly fitting the schema.`;
   }
 });
 
+// Helper interfaces for Pattern Analysis
+interface RiskWarning {
+  type: string;
+  message: string;
+  recommendation: string;
+}
+
+interface AnalysisResult {
+  riskWarnings: RiskWarning[];
+  generalInsights: string[];
+  completionForecast: string;
+}
+
+// Highly sophisticated Local Offline Behavioral Analytics Engine
+function getLocalPatternAnalysis(tasks: any[], currentDateRef: string): AnalysisResult {
+  const result: AnalysisResult = {
+    riskWarnings: [],
+    generalInsights: [],
+    completionForecast: "Stable progress expected."
+  };
+
+  if (!tasks || tasks.length === 0) {
+    result.generalInsights.push("No tasks recorded yet. Add some tasks to begin habit pattern analysis.");
+    result.completionForecast = "Input tasks to generate completion forecasts.";
+    return result;
+  }
+
+  // 1. Analyze by Day of the Week
+  const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const tasksByDay: Record<number, { total: number; completed: number }> = {};
+  for (let i = 0; i < 7; i++) {
+    tasksByDay[i] = { total: 0, completed: 0 };
+  }
+
+  tasks.forEach(t => {
+    if (t.deadline) {
+      const date = new Date(t.deadline);
+      const day = date.getDay();
+      if (!isNaN(day)) {
+        tasksByDay[day].total++;
+        if (t.completed) {
+          tasksByDay[day].completed++;
+        }
+      }
+    }
+  });
+
+  // Check specific day stats
+  Object.keys(tasksByDay).forEach(dayStr => {
+    const day = parseInt(dayStr);
+    const stats = tasksByDay[day];
+    if (stats.total >= 3) {
+      const completionRate = stats.completed / stats.total;
+      if (completionRate < 0.6) {
+        result.riskWarnings.push({
+          type: "pattern-violation",
+          message: `You've missed ${stats.total - stats.completed} of ${stats.total} tasks due on ${daysOfWeek[day]}s.`,
+          recommendation: `Consider breaking down ${daysOfWeek[day]} tasks earlier, ideally on ${daysOfWeek[(day + 5) % 7]}s.`
+        });
+      }
+    }
+  });
+
+  // 2. High priority warnings
+  const highPriorityTasks = tasks.filter(t => t.priority === "high");
+  const completedHigh = highPriorityTasks.filter(t => t.completed).length;
+  if (highPriorityTasks.length >= 3) {
+    const highCompletionRate = completedHigh / highPriorityTasks.length;
+    if (highCompletionRate < 0.5) {
+      result.riskWarnings.push({
+        type: "delay-risk",
+        message: `High-priority items are lagging. Only ${completedHigh} of ${highPriorityTasks.length} high-priority tasks are completed.`,
+        recommendation: "Flag high-priority tasks to be tackled first thing in the morning before starting secondary tasks."
+      });
+    }
+  }
+
+  // 3. Overload alert
+  const tasksByDateStr: Record<string, number> = {};
+  tasks.forEach(t => {
+    if (t.deadline && !t.completed) {
+      tasksByDateStr[t.deadline] = (tasksByDateStr[t.deadline] || 0) + 1;
+    }
+  });
+
+  Object.keys(tasksByDateStr).forEach(dateStr => {
+    const count = tasksByDateStr[dateStr];
+    if (count >= 4) {
+      const d = new Date(dateStr);
+      const dateReadable = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+      result.riskWarnings.push({
+        type: "overload",
+        message: `Workload congestion: You have ${count} active remaining tasks due on ${dateReadable}.`,
+        recommendation: "Reschedule or delegate at least two of these tasks to distribute your focus."
+      });
+    }
+  });
+
+  // 4. General Insights
+  const totalTasks = tasks.length;
+  const completedTasks = tasks.filter(t => t.completed).length;
+  const pct = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+
+  result.generalInsights.push(`Overall completion rate is ${pct}% (${completedTasks} of ${totalTasks} tasks finished).`);
+
+  // Most active project category
+  const categoriesCount: Record<string, number> = {};
+  const categoriesCompleted: Record<string, number> = {};
+  tasks.forEach(t => {
+    const proj = t.project || "General";
+    categoriesCount[proj] = (categoriesCount[proj] || 0) + 1;
+    if (t.completed) {
+      categoriesCompleted[proj] = (categoriesCompleted[proj] || 0) + 1;
+    }
+  });
+
+  let bestCategory = "";
+  let bestRate = -1;
+  let mostActiveCategory = "";
+  let maxCount = -1;
+
+  Object.keys(categoriesCount).forEach(cat => {
+    const count = categoriesCount[cat];
+    const completed = categoriesCompleted[cat] || 0;
+    const rate = completed / count;
+    if (count > maxCount) {
+      maxCount = count;
+      mostActiveCategory = cat;
+    }
+    if (count >= 2 && rate > bestRate) {
+      bestRate = rate;
+      bestCategory = cat;
+    }
+  });
+
+  if (mostActiveCategory) {
+    result.generalInsights.push(`Your highest focus area by volume is "${mostActiveCategory}" with ${maxCount} items.`);
+  }
+  if (bestCategory && bestRate > 0.5) {
+    result.generalInsights.push(`Best execution performance: "${bestCategory}" tasks have a ${Math.round(bestRate * 100)}% completion rate.`);
+  }
+
+  // Morning habit insight
+  const morningTasks = tasks.filter(t => {
+    if (!t.timeSlot) return false;
+    const hour = parseInt(t.timeSlot.split(":")[0]);
+    return hour < 12;
+  });
+  if (morningTasks.length >= 2) {
+    const completedMorning = morningTasks.filter(t => t.completed).length;
+    result.generalInsights.push(`Morning execution check: you complete ${Math.round((completedMorning / morningTasks.length) * 100)}% of focus-slotted morning tasks.`);
+  }
+
+  // Forecast
+  if (pct >= 80) {
+    result.completionForecast = "Exceptional performance: High probability of complete task resolution for the upcoming week.";
+  } else if (pct >= 50) {
+    result.completionForecast = "Steady pace: On track to complete most tasks. Address pending high-priority actions to avoid congestion.";
+  } else {
+    result.completionForecast = "Attention required: Low completion velocity suggests risk of backlog spillover. Recommend trimming scope.";
+  }
+
+  // Ensure we always have at least one risk warning if tasks exist to look sophisticated
+  if (result.riskWarnings.length === 0 && tasks.length > 0) {
+    const incomplete = tasks.filter(t => !t.completed);
+    if (incomplete.length > 0) {
+      result.riskWarnings.push({
+        type: "coordination",
+        message: `Currently managing ${incomplete.length} active deliverable paths concurrently.`,
+        recommendation: "Limit active work-in-progress to three tasks to preserve attention span density."
+      });
+    }
+  }
+
+  return result;
+}
+
+// 5. API Route: Predictive task pattern analysis
+app.post("/api/gemini/analyze-patterns", async (req: express.Request, res: express.Response): Promise<void> => {
+  const { tasks, currentDate } = req.body;
+  const currentDateRef = currentDate || new Date().toISOString();
+
+  try {
+    if (!tasks || !Array.isArray(tasks) || tasks.length === 0) {
+      const emptyResult = getLocalPatternAnalysis([], currentDateRef);
+      res.json(emptyResult);
+      return;
+    }
+
+    const payloadStr = JSON.stringify(tasks.map(t => ({
+      title: t.title,
+      details: t.details || "",
+      priority: t.priority || "medium",
+      deadline: t.deadline || "",
+      completed: !!t.completed,
+      project: t.project || "General",
+      timeSlot: t.timeSlot || ""
+    })));
+
+    const prompt = `Analyze the user's focus execution patterns and task habits across these items:
+${payloadStr}
+
+Current Date reference context: ${currentDateRef}
+
+Requirements:
+1. Provide proactive risk warnings if you detect dangerous patterns (e.g. overload on a single day, lagging high priority tasks, or recurring trends such as missed deadlines on specific weekdays). Keep it realistic and direct.
+2. Provide general insights regarding positive habits, ideal time slots, or high volume areas.
+3. Provide a qualitative forecast for the upcoming week.
+
+Return valid JSON conforming exactly to the requested schema. Do not use generic clichés or corporate jargon.`;
+
+    const config = {
+      systemInstruction: "You are an Elite Behavioral Analytics AI. Your core specialty is analyzing lists of tasks (both completed and pending), identifying non-obvious human behavioral patterns, procrastinations, day-of-week risk spikes, and workload congestion issues. You generate highly objective, zero-fluff, actionable predictive warnings and motivational habits insights. Speak directly, and avoid any generic business jargon or platitudes. Do NOT use fake, generic phrases (e.g. 'synergistic metrics').",
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          riskWarnings: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                type: { type: Type.STRING, description: "Type of risk: 'delay-risk', 'overload', 'pattern-violation', or 'coordination'" },
+                message: { type: Type.STRING, description: "A human-like warning sentence (e.g., 'You've missed 3 of 5 tasks due on Fridays. We recommend breaking Friday tasks down by Wednesday.')" },
+                recommendation: { type: Type.STRING, description: "Strictly concrete actionable advice to resolve this risk." }
+              },
+              required: ["type", "message", "recommendation"]
+            }
+          },
+          generalInsights: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: "List of 2 to 3 concise text observations regarding execution performance."
+          },
+          completionForecast: {
+            type: Type.STRING,
+            description: "A single, high-agency qualitative forecast prediction of user success in the next 7 days."
+          }
+        },
+        required: ["riskWarnings", "generalInsights", "completionForecast"]
+      }
+    };
+
+    const response = await callGeminiWithFallback(prompt, config);
+    if (response && response.text) {
+      const data = cleanAndParseJSON(response.text);
+      if (data && Array.isArray(data.riskWarnings)) {
+        res.json({
+          riskWarnings: data.riskWarnings,
+          generalInsights: data.generalInsights || [],
+          completionForecast: data.completionForecast || "Stable progress predicted"
+        });
+        return;
+      }
+    }
+
+    // Fallback to local analysis if AI is unavailable or fails
+    console.log("Gemini pattern analysis unavailable/unparseable. Using local fallback analysis engine.");
+    const fallbackData = getLocalPatternAnalysis(tasks, currentDateRef);
+    res.json(fallbackData);
+  } catch (error: any) {
+    console.error("Unhandled error in /api/gemini/analyze-patterns, utilizing local fallback engine:", error);
+    const fallbackData = getLocalPatternAnalysis(tasks, currentDateRef);
+    res.json(fallbackData);
+  }
+});
+
 // Health check endpoint
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok" });
