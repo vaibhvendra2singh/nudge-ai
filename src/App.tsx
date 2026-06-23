@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Task } from "./types";
-import { generateInitialTasks, getTaskUrgencyDetails } from "./utils";
+import { getTaskUrgencyDetails } from "./utils";
 import Dashboard from "./components/Dashboard";
 import TaskDetail from "./components/TaskDetail";
 import AddTask from "./components/AddTask";
@@ -15,73 +15,66 @@ export default function App() {
 
   // Initialize and load from local storage
   useEffect(() => {
+    // 1. Immediate local cache load to guarantee ultra-fast, skeletonless UI
     const savedTasks = localStorage.getItem("nudge_tasks");
     const savedName = localStorage.getItem("nudge_username");
-
+    
     if (savedTasks) {
       try {
         const parsed = JSON.parse(savedTasks);
         if (Array.isArray(parsed)) {
-          const sanitized = parsed.map((t: any) => ({
+          const localTasks = parsed.map((t: any) => ({
             ...t,
             subtasks: Array.isArray(t.subtasks) ? t.subtasks : [],
           }));
-          setTasks(sanitized);
-        } else {
-          setTasks([]);
+          setTasks(localTasks);
         }
       } catch (err) {
-        setTasks([]);
+        console.error("Local storage decode error:", err);
       }
-    } else {
-      // Empty by default for new users, no auto-seeding demo tasks
-      setTasks([]);
-      localStorage.setItem("nudge_tasks", JSON.stringify([]));
     }
-
     if (savedName) {
       setUserName(savedName);
     }
   }, []);
 
-  // Save to local storage whenever state changes
-  const saveTasksState = (newTasks: Task[]) => {
+  // Save state locally
+  const saveTasksState = async (newTasks: Task[]) => {
     setTasks(newTasks);
     localStorage.setItem("nudge_tasks", JSON.stringify(newTasks));
   };
 
-  const saveUserNameState = (newName: string) => {
+  const saveUserNameState = async (newName: string) => {
     setUserName(newName);
     localStorage.setItem("nudge_username", newName);
   };
 
   // Toggle checklist complete
-  const handleToggleComplete = (id: string, e: React.MouseEvent | React.ChangeEvent) => {
+  const handleToggleComplete = async (id: string, e: React.MouseEvent | React.ChangeEvent) => {
     e.stopPropagation(); // prevent opening task details
-    setTasks(prevTasks => {
-      const updated = prevTasks.map(task => {
-        if (task.id === id) {
-          return {
-            ...task,
-            completed: !task.completed,
-          };
-        }
-        return task;
-      });
-      localStorage.setItem("nudge_tasks", JSON.stringify(updated));
-      return updated;
+    
+    const updated = tasks.map(task => {
+      if (task.id === id) {
+        return {
+          ...task,
+          completed: !task.completed,
+        };
+      }
+      return task;
     });
+
+    setTasks(updated);
+    localStorage.setItem("nudge_tasks", JSON.stringify(updated));
   };
 
   // Single task updated from details panel in real-time
-  const handleUpdateTask = (updatedTask: Task) => {
+  const handleUpdateTask = async (updatedTask: Task) => {
     setTasks(prevTasks => {
       if (!prevTasks.some(t => t.id === updatedTask.id)) {
         return prevTasks; // It was deleted, do not resurrect!
       }
       const updated = prevTasks.map(t => {
         if (t.id === updatedTask.id) {
-          // If the incoming update clobbers subtasks back to empty string when they were already generated, ignore that clobbering!
           const subtasks = (updatedTask.subtasks && updatedTask.subtasks.length > 0) 
             ? updatedTask.subtasks 
             : (t.subtasks && t.subtasks.length > 0 ? t.subtasks : []);
@@ -107,44 +100,33 @@ export default function App() {
   };
 
   // Task deleted
-  const handleDeleteTask = (id: string) => {
-    setTasks(prevTasks => {
-      const filtered = prevTasks.filter(t => t.id !== id);
-      localStorage.setItem("nudge_tasks", JSON.stringify(filtered));
-      return filtered;
-    });
+  const handleDeleteTask = async (id: string) => {
+    const filtered = tasks.filter(t => t.id !== id);
+    setTasks(filtered);
+    localStorage.setItem("nudge_tasks", JSON.stringify(filtered));
     setSelectedTaskId(null);
     setActiveTab("dashboard");
   };
 
   // Add a new task submission
-  const handleAddTask = (newTaskData: Omit<Task, "id" | "completed" | "subtasks">) => {
+  const handleAddTask = async (newTaskData: Omit<Task, "id" | "completed" | "subtasks">) => {
     const freshTask: Task = {
       ...newTaskData,
       id: `task-${Date.now()}`,
       completed: false,
       subtasks: [],
     };
-    setTasks(prevTasks => {
-      const updated = [freshTask, ...prevTasks];
-      localStorage.setItem("nudge_tasks", JSON.stringify(updated));
-      return updated;
-    });
-    setActiveTab("dashboard");
-    setSelectedTaskId(null);
-  };
 
-  // Reset demo suites
-  const handleResetToDemo = () => {
-    const demoTasks = generateInitialTasks();
-    saveTasksState(demoTasks);
-    setSelectedTaskId(null);
+    const updated = [freshTask, ...tasks];
+    setTasks(updated);
+    localStorage.setItem("nudge_tasks", JSON.stringify(updated));
     setActiveTab("dashboard");
+    setSelectedTaskId(null);
   };
 
   // Purge entire task database
-  const handleClearAllTasks = () => {
-    saveTasksState([]);
+  const handleClearAllTasks = async () => {
+    await saveTasksState([]);
     setSelectedTaskId(null);
     setActiveTab("dashboard");
   };
@@ -157,6 +139,7 @@ export default function App() {
     const hasNoCompletedSubtasks = subtasksList.length === 0 || !subtasksList.some(s => s.completed);
     return details.category === "urgent" && hasNoCompletedSubtasks;
   });
+
 
   // Safe navigation proxy
   const handleNavigateToTab = (tab: "dashboard" | "add_task" | "settings") => {
@@ -191,7 +174,16 @@ export default function App() {
         </div>
 
         {/* Action icons */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
+          {/* Local Active Storage Indicator */}
+          <div 
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[10px] font-mono tracking-wider uppercase font-bold select-none bg-zinc-900 border-zinc-800 text-zinc-400"
+            title="All tasks and checklists are secured automatically in your browser's persistent Local Storage."
+          >
+            <span className="material-symbols-outlined text-[13px] text-emerald-400 filter drop-shadow-[0_0_2px_rgba(52,211,153,0.5)]">database</span>
+            <span className="hidden xs:inline">Local Storage</span>
+          </div>
+
           {/* Notifications Trigger */}
           <button
             onClick={() => setShowNotifications(!showNotifications)}
@@ -295,7 +287,6 @@ export default function App() {
           <Settings
             userName={userName}
             onUpdateUserName={saveUserNameState}
-            onResetTasksToDemo={handleResetToDemo}
             onClearAllTasks={handleClearAllTasks}
             totalTasksCount={tasks.length}
           />

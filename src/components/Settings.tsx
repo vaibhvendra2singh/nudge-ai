@@ -3,7 +3,6 @@ import React, { useState, useEffect } from "react";
 interface SettingsProps {
   userName: string;
   onUpdateUserName: (name: string) => void;
-  onResetTasksToDemo: () => void;
   onClearAllTasks: () => void;
   totalTasksCount: number;
 }
@@ -11,7 +10,6 @@ interface SettingsProps {
 export default function Settings({
   userName,
   onUpdateUserName,
-  onResetTasksToDemo,
   onClearAllTasks,
   totalTasksCount,
 }: SettingsProps) {
@@ -19,7 +17,6 @@ export default function Settings({
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [healthStatus, setHealthStatus] = useState<"idle" | "testing" | "ok" | "error">("idle");
   const [healthMessage, setHealthMessage] = useState("");
-  const [showDemoConfirm, setShowDemoConfirm] = useState(false);
   const [showWipeConfirm, setShowWipeConfirm] = useState(false);
 
   const handleSaveName = (e: React.FormEvent) => {
@@ -142,7 +139,7 @@ export default function Settings({
         </div>
       </section>
 
-      {/* App Cache and reset suite */}
+      {/* App Cache controls */}
       <section className="space-y-4">
         <h3 className="font-headline text-sm font-bold uppercase text-slate-500 tracking-wider">
           3. Workspace Cache Controls
@@ -151,46 +148,7 @@ export default function Settings({
           The application state resides locally inside current browser storage block (<strong className="text-slate-700">localStorage</strong>). There are currently <strong className="text-slate-700">{totalTasksCount} task item(s)</strong> parsed.
         </p>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
-           {/* Load Mock Demo */}
-          <div className="p-4 bg-white border border-slate-200 rounded-xl space-y-3 flex flex-col justify-between shadow-sm">
-            <div>
-              <p className="font-mono text-[10px] text-slate-400 uppercase font-bold">Demo Suite</p>
-              <p className="text-xs text-slate-500 leading-relaxed font-body mt-1">
-                Restore the pristine demo mockup task queue including standard Work and Personal tasks shown on layout snapshots.
-              </p>
-            </div>
-            {showDemoConfirm ? (
-              <div className="space-y-2">
-                <p className="font-mono text-[10px] text-black font-bold uppercase text-center">Are you absolute certain?</p>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => {
-                      onResetTasksToDemo();
-                      setShowDemoConfirm(false);
-                    }}
-                    className="flex-1 bg-black hover:bg-zinc-800 text-white font-mono text-[11px] uppercase font-bold py-2 rounded-lg transition"
-                  >
-                    Yes
-                  </button>
-                  <button
-                    onClick={() => setShowDemoConfirm(false)}
-                    className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-mono text-[11px] uppercase font-bold py-2 rounded-lg transition"
-                  >
-                    No
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <button
-                onClick={() => setShowDemoConfirm(true)}
-                className="w-full bg-slate-800 text-white font-mono text-xs uppercase font-bold py-2.5 rounded-lg border-none hover:bg-slate-900 transition-all cursor-pointer shadow"
-              >
-                Reset to Demo Tasks
-              </button>
-            )}
-          </div>
-
+        <div className="grid grid-cols-1 gap-4 pt-1">
           {/* Wipe Cache */}
           <div className="p-4 bg-zinc-100 border border-zinc-200 rounded-xl space-y-3 flex flex-col justify-between shadow-sm">
             <div>

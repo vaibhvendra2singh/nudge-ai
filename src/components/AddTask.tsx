@@ -102,6 +102,11 @@ export default function AddTask({ onAddTask, onCancel }: AddTaskProps) {
       return;
     }
 
+    // Stop listening if mic is actively recording
+    if (isListening) {
+      stopListening();
+    }
+
     setIsProcessingSpeech(true);
     setSpeechError(null);
     setSpeechSuccessMessage(null);
@@ -359,7 +364,7 @@ export default function AddTask({ onAddTask, onCancel }: AddTaskProps) {
           )}
 
           {/* Action trigger button */}
-          {transcript && !isListening && (
+          {transcript && (
             <div className="flex justify-end pt-1 animate-fade-in">
               <button
                 type="button"
