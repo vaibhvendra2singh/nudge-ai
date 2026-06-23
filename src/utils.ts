@@ -1,0 +1,302 @@
+import { Task } from "./types";
+
+/**
+ * Calculates human readable remaining time and maps the task to an urgency category.
+ * - 'urgent': due today/less than 24 hours (<= 24 hours remaining)
+ * - 'soon': due in 1 to 4 days
+ * - 'future': due in 5 or more days
+ */
+export function getTaskUrgencyDetails(task: Task, referenceDateStr?: string | null) {
+  const referenceDate = referenceDateStr ? new Date(referenceDateStr) : new Date();
+  
+  // Set deadline date time to the selected recommended time or default 17:00 (5:00 PM) today
+  let deadlineTimeStr = "17:00";
+  if (task && task.timeSlot) {
+    deadlineTimeStr = task.timeSlot;
+  }
+  
+  if (!task || !task.deadline || typeof task.deadline !== "string") {
+    return {
+      timeLabel: "No Deadline",
+      category: "future" as const,
+      hoursLeft: 0,
+      isOverdue: false,
+    };
+  }
+  
+  const parts = task.deadline.split("-");
+  if (parts.length < 3) {
+    return {
+      timeLabel: "Invalid Deadline",
+      category: "future" as const,
+      hoursLeft: 0,
+      isOverdue: false,
+    };
+  }
+  
+  // Parse task deadline which is template 'YYYY-MM-DD'
+  const [year, month, day] = parts.map(Number);
+  let parsedHour = 17;
+  let parsedMinute = 0;
+  if (deadlineTimeStr) {
+    const timeParts = deadlineTimeStr.split(":");
+    if (timeParts.length >= 2) {
+      parsedHour = Number(timeParts[0]);
+      parsedMinute = Number(timeParts[1]);
+    }
+  }
+  
+  const deadlineDate = new Date(year, month - 1, day, parsedHour, parsedMinute, 0);
+  
+  const diffMs = deadlineDate.getTime() - referenceDate.getTime();
+  const diffHours = diffMs / (1000 * 60 * 60);
+  
+  let timeLabel = "";
+  let category: "urgent" | "soon" | "future" = "future";
+  let hoursLeft = Math.max(0, Math.floor(diffHours));
+  let isOverdue = diffMs < 0;
+
+  if (isOverdue) {
+    timeLabel = "Overdue";
+    category = "urgent";
+  } else if (diffHours <= 24) {
+    category = "urgent";
+    const hours = Math.max(1, Math.floor(diffHours));
+    timeLabel = `${hours} hour${hours > 1 ? "s" : ""} left`;
+  } else if (diffHours <= 72) {
+    category = "soon";
+    const days = Math.ceil(diffHours / 24);
+    timeLabel = `${days} day${days > 1 ? "s" : ""} left`;
+  } else {
+    category = "future";
+    const days = Math.ceil(diffHours / 24);
+    timeLabel = `${days} day${days > 1 ? "s" : ""} left`;
+  }
+
+  return {
+    timeLabel,
+    category,
+    hoursLeft,
+    isOverdue,
+  };
+}
+
+// Helper utility to get a dynamic date string (YYYY-MM-DD) from the current date with offset of days
+function getRelativeDateString(daysOffset: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + daysOffset);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+/**
+ * Generates seed/mock tasks for the demo matching the mockup images exactly.
+ */
+export function generateInitialTasks(): Task[] {
+  // Use relative dates from today to dynamically balance the columns on first load.
+  // Today's Date is 0 days offset
+  // Soon is within 1 to 3 days (e.g. 2 days or 3 days offset)
+  // Future is > 3 days (e.g. 5, 8, or 12 days offset)
+  const todayDateStr = getRelativeDateString(0);
+  const soon2DaysStr = getRelativeDateString(2);
+  const soon3DaysStr = getRelativeDateString(3);
+  const future8DaysStr = getRelativeDateString(8);
+  const future12DaysStr = getRelativeDateString(12);
+
+  // Set timeslots relative to current hour or standard times to guarantee they fit beautifully
+  const now = new Date();
+  const currentHour = now.getHours();
+  // For demo-1 and demo-2 (due today), set times in the near future of today so they are not loaded as immediate overdue in the afternoon.
+  // If current hour is late, we can set them to currentHour + 4 or default to standard times.
+  const hour1 = String((currentHour + 2) % 24).padStart(2, "0");
+  const hour2 = String((currentHour + 5) % 24).padStart(2, "0");
+
+  return [
+    {
+      id: "demo-1",
+      title: "Q3 STRATEGY REVIEW",
+      details: "Gather all metrics for Q3 performance and draft the executive summary for the stakeholder board meeting.",
+      priority: "high",
+      deadline: todayDateStr, // Due today
+      timeSlot: `${hour1}:48`, // Dynamic near future time
+      completed: false,
+      project: "Work",
+      subtasks: [],
+      aiBreakdownGenerated: false,
+    },
+    {
+      id: "demo-2",
+      title: "DOCTOR'S APPOINTMENT",
+      details: "Routine check-up with Dr. Patel. Remember to print past blood work and list any specific symptom details.",
+      priority: "medium",
+      deadline: todayDateStr, // Due today
+      timeSlot: `${hour2}:30`, // Dynamic near future time
+      completed: false,
+      project: "Personal",
+      subtasks: [],
+      aiBreakdownGenerated: false,
+    },
+    {
+      id: "demo-3",
+      title: "CLIENT PROPOSAL EMAIL",
+      details: "Review current budget spreadsheet, consolidate project roadmap details, and write out draft of email proposal.",
+      priority: "medium",
+      deadline: soon2DaysStr, // 2 days left (Soon)
+      timeSlot: "14:30",
+      completed: false,
+      project: "Work",
+      subtasks: [
+        { id: "sub-1-1", title: "Review current budget metrics", completed: false },
+        { id: "sub-1-2", title: "Format visual tables for slides", completed: false },
+      ],
+      aiBreakdownGenerated: true,
+    },
+    {
+      id: "demo-4",
+      title: "WEEKLY RUN (5KM)",
+      details: "Interval session or continuous 5K loop on outdoor track. Log current pace stats inside app log afterwards.",
+      priority: "low",
+      deadline: soon3DaysStr, // 3 days left (Soon)
+      timeSlot: "18:00",
+      completed: false,
+      project: "Personal",
+      subtasks: [],
+      aiBreakdownGenerated: false,
+    },
+    {
+      id: "demo-5",
+      title: "VACATION PLANNING",
+      details: "Lookup flight price alerts, confirm hotel calendar dates, and update itinerary notes spreadsheet.",
+      priority: "low",
+      deadline: future8DaysStr, // 8 days left (Future)
+      timeSlot: "09:00",
+      completed: false,
+      project: "Personal",
+      subtasks: [],
+      aiBreakdownGenerated: false,
+    },
+    {
+      id: "demo-6",
+      title: "DESIGN SYSTEM UPDATE",
+      details: "Examine components library discrepancies and check Figma design updates for compliance.",
+      priority: "high",
+      deadline: future12DaysStr, // 12 days left (Future)
+      timeSlot: "14:30",
+      completed: true,
+      project: "Work",
+      subtasks: [],
+      aiBreakdownGenerated: false,
+    },
+  ];
+}
+
+/**
+ * Generates and triggers download of a standardized .ics calendar event file
+ * for Google Calendar, Apple Calendar, Outlook, etc.
+ */
+export function downloadICSFile(task: {
+  title: string;
+  details?: string;
+  deadline: string;
+  timeSlot?: string;
+  project?: string;
+}) {
+  const dateStr = task.deadline; // e.g., "2026-06-23"
+  const timeStr = task.timeSlot || "17:00"; // e.g., "17:00"
+
+  // Parse date and time safely
+  let dateObj = new Date();
+  const dateParts = dateStr.split("-");
+  if (dateParts.length === 3) {
+    const year = parseInt(dateParts[0], 10);
+    const month = parseInt(dateParts[1], 10) - 1;
+    const day = parseInt(dateParts[2], 10);
+
+    const timeParts = timeStr.split(":");
+    const hours = timeParts.length >= 1 ? parseInt(timeParts[0], 10) : 17;
+    const minutes = timeParts.length >= 2 ? parseInt(timeParts[1], 10) : 0;
+
+    dateObj = new Date(year, month, day, hours, minutes);
+  } else {
+    const parsed = Date.parse(dateStr);
+    if (!isNaN(parsed)) {
+      dateObj = new Date(parsed);
+    }
+  }
+
+  const pad = (num: number) => String(num).padStart(2, "0");
+
+  const formatDateICS = (date: Date) => {
+    return (
+      date.getUTCFullYear() +
+      pad(date.getUTCMonth() + 1) +
+      pad(date.getUTCDate()) +
+      "T" +
+      pad(date.getUTCHours()) +
+      pad(date.getUTCMinutes()) +
+      pad(date.getUTCSeconds()) +
+      "Z"
+    );
+  };
+
+  const dtStamp = formatDateICS(new Date());
+  const dtStart = formatDateICS(dateObj);
+
+  // End time is 30 mins after start default
+  const endObj = new Date(dateObj.getTime() + 30 * 60 * 1000);
+  const dtEnd = formatDateICS(endObj);
+
+  // Escape special chars for ICS format
+  const escapeICS = (str: string) => {
+    return str
+      .replace(/\\/g, "\\\\")
+      .replace(/;/g, "\\;")
+      .replace(/,/g, "\\,")
+      .replace(/\n/g, "\\n");
+  };
+
+  const titleEscaped = escapeICS(task.title);
+  const detailsEscaped = escapeICS(
+    task.details || "Refine this task objective and finish outstanding steps."
+  );
+  const projectEscaped = task.project ? escapeICS(task.project) : "Nudge Task";
+
+  const uid = `nudge-${Date.now()}-${Math.random().toString(36).substring(2, 11)}@nudgeflow`;
+
+  const icsLines = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//NudgeFlow//Nudge Task Scheduler//EN",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+    "BEGIN:VEVENT",
+    `UID:${uid}`,
+    `DTSTAMP:${dtStamp}`,
+    `DTSTART:${dtStart}`,
+    `DTEND:${dtEnd}`,
+    `SUMMARY:${projectEscaped ? `[${projectEscaped}] ` : ""}${titleEscaped}`,
+    `DESCRIPTION:${detailsEscaped}`,
+    "STATUS:CONFIRMED",
+    "SEQUENCE:0",
+    "END:VEVENT",
+    "END:VCALENDAR",
+  ];
+
+  const icsContent = icsLines.join("\r\n");
+  const blob = new Blob([icsContent], { type: "text/calendar;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+
+  const link = document.createElement("a");
+  link.href = url;
+
+  const sanitizedTitle = task.title.replace(/[^a-z0-9]/gi, "_").toLowerCase().slice(0, 30);
+  link.download = `nudge_task_${sanitizedTitle || "event"}.ics`;
+
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
