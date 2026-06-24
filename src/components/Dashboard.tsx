@@ -258,9 +258,6 @@ export default function Dashboard({
                 <h3 className="font-headline text-xs font-black text-slate-800 uppercase tracking-widest leading-none">
                   Google Calendar Sync
                 </h3>
-                <p className="font-mono text-[9px] uppercase tracking-wider text-slate-400 mt-1">
-                  {gcalConnected ? `Secure workspace link with ${gcalUserEmail || 'alex@gmail.com'}` : "Check active conflicts & find open focus blocks"}
-                </p>
               </div>
             </div>
 
@@ -291,13 +288,12 @@ export default function Dashboard({
             <div className="bg-red-50 text-red-700 text-xs border border-red-100 p-3 rounded-lg mb-4 flex items-start gap-2 animate-shake">
               <span className="material-symbols-outlined text-sm font-bold mt-0.5">error_outline</span>
               <div>
-                <p className="font-bold uppercase tracking-wider text-[9px] font-mono">Sync Blocked</p>
                 <p className="mt-0.5 leading-relaxed font-semibold">{calendarError}</p>
                 <button 
                   onClick={onConnectGcal}
-                  className="font-mono text-[9px] uppercase underline mt-1.5 font-bold cursor-pointer block hover:text-red-900 animate-pulse"
+                  className="font-mono text-[9px] uppercase underline mt-1.5 font-bold cursor-pointer block hover:text-red-900"
                 >
-                  Click to re-authorize Google Calendar
+                  Re-authorize Google Calendar
                 </button>
               </div>
             </div>
@@ -306,7 +302,6 @@ export default function Dashboard({
           {gcalLoadingEvents ? (
             <div className="flex items-center justify-center gap-2 py-6 text-slate-500 text-xs font-mono uppercase tracking-wider">
               <div className="w-4 h-4 border-2 border-slate-600 border-t-transparent animate-spin rounded-full"></div>
-              <span>Securing timeline handshake...</span>
             </div>
           ) : gcalConnected ? (
             <div className="space-y-4 font-sans text-slate-800">
@@ -341,7 +336,7 @@ export default function Dashboard({
                 <div className="bg-emerald-50/20 border border-emerald-100 rounded-xl p-3 flex items-center gap-2.5 text-xs text-emerald-800">
                   <span className="material-symbols-outlined text-emerald-600 font-bold">verified</span>
                   <p className="font-semibold text-left">
-                    No active scheduling collisions. All task deadlines align with your Google Calendar events.
+                    No active scheduling collisions.
                   </p>
                 </div>
               )}
@@ -350,7 +345,6 @@ export default function Dashboard({
               {smartDaySuggestion && (
                 <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="space-y-0.5 text-left">
-                    <span className="font-mono text-[9px] font-bold text-slate-500 uppercase tracking-widest block font-sans">Smarter Deadlines Advisor</span>
                     <p className="text-sm font-bold text-slate-800 uppercase tracking-tight">
                       {smartDaySuggestion}
                     </p>
@@ -365,11 +359,9 @@ export default function Dashboard({
               )}
 
               {/* Interactive Calendar Feed Strip */}
-              <div className="pt-2">
-                <span className="font-mono text-[9px] font-bold text-slate-400 uppercase tracking-widest block mb-2 text-left">Upcoming Commitments (7 days)</span>
-                {gcalEvents.length === 0 ? (
-                  <p className="font-mono text-center text-xs py-4 text-slate-400 uppercase">Your Calendar is completely empty for the next 7 days.</p>
-                ) : (
+              {gcalEvents.length > 0 && (
+                <div className="pt-2">
+                  <span className="font-mono text-[9px] font-bold text-slate-400 uppercase tracking-widest block mb-2 text-left">Upcoming Commitments (7 days)</span>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                     {gcalEvents.slice(0, 4).map(event => {
                       const startStr = event.start.dateTime || event.start.date || "";
@@ -390,8 +382,8 @@ export default function Dashboard({
                       );
                     })}
                   </div>
-                )}
-              </div>
+                </div>
+              )}
             </div>
           ) : (
             <div className="text-center py-6 px-4 space-y-3.5">
@@ -400,9 +392,6 @@ export default function Dashboard({
               </div>
               <div className="space-y-1">
                 <h4 className="font-headline text-xs font-bold text-slate-700 uppercase tracking-wider">Sync Google Calendar commitments</h4>
-                <p className="font-body text-slate-500 text-xs max-w-sm mx-auto leading-relaxed">
-                  Avoid planning overlapping task deadlines. Direct Google Calendar sync checks your availability dynamically, indicates collisions, and computes optimal times.
-                </p>
               </div>
               <div className="flex justify-center pt-1">
                 <button
@@ -540,9 +529,6 @@ export default function Dashboard({
             </div>
             <div className="space-y-1">
               <h3 className="font-headline text-xs font-bold text-slate-700 uppercase tracking-wider">No Urgent Demands</h3>
-              <p className="font-body text-slate-500 text-xs max-w-md mx-auto leading-relaxed">
-                Your immediate horizon is clear! There are no high-priority tasks due today. Use this space to plan ahead or take a well-deserved breathing rest.
-              </p>
             </div>
           </div>
         ) : (
@@ -607,9 +593,6 @@ export default function Dashboard({
             </div>
             <div className="space-y-1">
               <h3 className="font-headline text-xs font-bold text-slate-700 uppercase tracking-wider">No Tasks Soon</h3>
-              <p className="font-body text-slate-500 text-xs max-w-md mx-auto leading-relaxed">
-                The next few days look beautifully spacious. No tasks have been scheduled for this timeframe.
-              </p>
             </div>
           </div>
         ) : (
@@ -671,9 +654,6 @@ export default function Dashboard({
             </div>
             <div className="space-y-1">
               <h3 className="font-headline text-xs font-bold text-slate-700 uppercase tracking-wider">No Long-term Schedule</h3>
-              <p className="font-body text-slate-500 text-xs max-w-md mx-auto leading-relaxed">
-                No future dates are mapped out yet. Capture ideas early so you never feel hurried when they arrive.
-              </p>
             </div>
           </div>
         ) : (
@@ -734,9 +714,6 @@ export default function Dashboard({
             </div>
             <div className="space-y-1">
               <h3 className="font-headline text-[11px] font-bold text-slate-605 uppercase tracking-wider">No Resolved Items Yet</h3>
-              <p className="font-body text-slate-400 text-xs max-w-md mx-auto leading-relaxed">
-                Take things one deliberate step at a time. Once you check a task off as complete, it will be catalogued right here.
-              </p>
             </div>
           </div>
         ) : (

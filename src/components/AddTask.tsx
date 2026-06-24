@@ -290,9 +290,6 @@ export default function AddTask({
           <h2 className="font-headline text-xl sm:text-2xl font-black text-slate-800 uppercase tracking-tight">
             New Task Draft
           </h2>
-          <p className="text-slate-500 text-xs font-mono uppercase">
-            Capture your momentum. Set the pace.
-          </p>
         </div>
 
         {/* Voice Extraction Bento Block */}
@@ -333,10 +330,6 @@ export default function AddTask({
             </button>
 
             <div className="flex-1 space-y-2">
-              <p className="text-slate-500 text-[11px] leading-relaxed">
-                Click microphone, details are processed by speech recognition. (e.g., <span className="italic text-slate-705">"Remind me to call the dentist by Friday 5pm"</span> or <span className="italic text-slate-705">"Review project guidelines by tomorrow afternoon high priority"</span>).
-              </p>
-
               {/* Editable Transcription preview */}
               {(transcript || isListening) && (
                 <div className="space-y-1.5 mt-2 animate-fade-in text-left">
@@ -652,10 +645,6 @@ export default function AddTask({
             <span className="material-symbols-outlined text-[20px] font-bold">check_circle</span>
             <span>Add Action Task</span>
           </button>
-          
-          <p className="text-center text-[10px] text-slate-400 font-mono uppercase tracking-widest">
-            Press <kbd className="bg-white px-1.5 py-0.5 border border-slate-200 shadow-sm rounded ml-1 text-slate-550">Cmd</kbd> + <kbd className="bg-white px-1.5 py-0.5 border border-slate-200 shadow-sm rounded text-slate-550">Enter</kbd> to quick-save immediately
-          </p>
         </div>
       </form>
     </div>

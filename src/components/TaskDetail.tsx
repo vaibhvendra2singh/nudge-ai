@@ -242,9 +242,11 @@ export default function TaskDetail({
             )}
           </div>
         </div>
-        <p className="font-body text-slate-600 text-sm sm:text-base leading-relaxed whitespace-pre-line border-l-4 border-slate-300 pl-4 py-1">
-          {task.details || "No specific details provided for this action."}
-        </p>
+        {task.details && (
+          <p className="font-body text-slate-600 text-sm sm:text-base leading-relaxed whitespace-pre-line border-l-4 border-slate-300 pl-4 py-1">
+            {task.details}
+          </p>
+        )}
       </section>
 
       {/* AUTOMATIC URGENT NUDGE SECTION */}
@@ -325,23 +327,9 @@ export default function TaskDetail({
             <p className="font-mono text-xs text-slate-650 font-bold uppercase tracking-wider">
               Checklist Generation Paused
             </p>
-            <p className="text-slate-500 text-[11px] leading-relaxed max-w-sm mx-auto">
-              We encountered a minor network error or quota cap with Gemini. Standard operations remain fully intact.
-            </p>
-            <button
-              type="button"
-              onClick={triggerBreakdown}
-              className="px-4 py-2 bg-black hover:bg-zinc-800 text-white font-bold text-[10px] uppercase tracking-wider rounded-lg transition-all cursor-pointer shadow-md inline-flex items-center gap-1.5"
-            >
-              <span className="material-symbols-outlined text-[14px]">refresh</span>
-              <span>Retry Checklist Generation</span>
-            </button>
           </div>
         ) : subtasksList.length === 0 ? (
           <div className="border border-dashed border-slate-200 bg-slate-50 p-6 rounded-lg text-center space-y-3">
-            <p className="font-mono text-xs text-slate-400 uppercase tracking-widest">
-              Big hurdles are lighter when parsed to smaller steps.
-            </p>
             <button
               onClick={triggerBreakdown}
               className="px-5 py-2.5 ai-gradient hover:opacity-90 active:scale-95 text-white font-bold text-xs uppercase tracking-wide rounded-lg transition-all cursor-pointer shadow-md inline-flex items-center gap-2"
@@ -420,9 +408,6 @@ export default function TaskDetail({
                 <p className="text-xs font-semibold leading-relaxed">
                   This task's target deadline overlaps with <span className="font-bold underline">{conflicts.map(c => `'${c.event.summary || "Busy Slot"}'`).join(", ")}</span> on your Google Calendar.
                 </p>
-                <p className="text-[10px] text-amber-900 mt-1.5 font-bold">
-                  Tip: Use the alternate hourly slots or consider rescheduling this task to a clear block.
-                </p>
               </div>
             </div>
           );
@@ -431,7 +416,7 @@ export default function TaskDetail({
             <div className="mb-6 bg-emerald-50/30 border border-emerald-150 text-emerald-800 p-3 rounded-xl flex items-center gap-2.5 text-left text-xs font-sans animate-fade-in">
               <span className="material-symbols-outlined text-emerald-600 font-bold">check_circle</span>
               <p className="font-semibold">
-                Google Calendar Checked: No scheduling conflicts for this deadline!
+                No scheduling conflicts!
               </p>
             </div>
           );
@@ -475,9 +460,6 @@ export default function TaskDetail({
           <div className="mt-2">
             <p className="text-lg font-bold text-slate-800 uppercase font-headline leading-tight">
               {priorityMeta.main}
-            </p>
-            <p className="text-[10px] text-slate-400 font-mono mt-0.5">
-              {priorityMeta.sub}
             </p>
           </div>
         </div>

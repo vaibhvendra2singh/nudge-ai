@@ -286,9 +286,6 @@ export default function Settings({
           <span className="material-symbols-outlined text-[26px]">tune</span>
           Settings & Diagnostics
         </h2>
-        <p className="text-slate-400 text-xs font-mono uppercase">
-          Customize credentials, export backups, and test live AI integration layers.
-        </p>
       </section>
 
       {/* User Customization Card */}
@@ -299,9 +296,6 @@ export default function Settings({
             1. Identity Configuration
           </h3>
         </div>
-        <p className="text-xs text-slate-500 font-body leading-relaxed">
-          Change your nickname below. Nudge will use this name to address you during personalized urgent warnings and daily schedule briefings.
-        </p>
         <form onSubmit={handleSaveName} className="space-y-3">
           <div className="flex gap-2 max-w-md">
             <input
@@ -341,9 +335,6 @@ export default function Settings({
             Sandbox Sandbox
           </span>
         </div>
-        <p className="text-xs text-slate-500 font-body leading-relaxed">
-          Test your browser's native speech recognition pipeline right here! Real-time voice inputs will map into exact deadlines and dates through Gemini's semantic model.
-        </p>
 
         <div className="space-y-3 pt-1">
           <div className="flex flex-wrap gap-2">
@@ -422,9 +413,6 @@ export default function Settings({
             3. Task Portability & Cloudless Backups
           </h3>
         </div>
-        <p className="text-xs text-slate-500 font-body leading-relaxed">
-          Since Nudge behaves local-first to respect privacy, you can export your task list database block as a local file or upload archives to migrate your list seamlessly across browsers.
-        </p>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
           {/* Export Box */}
@@ -432,9 +420,6 @@ export default function Settings({
             <div>
               <span className="font-mono text-[9px] text-slate-400 uppercase font-bold tracking-wider">File Backup</span>
               <h4 className="font-bold text-xs uppercase text-slate-800 mt-0.5">Export Task Database</h4>
-              <p className="text-[11px] text-slate-500 font-body leading-relaxed mt-1">
-                Download a clean JSON archive containing your active tasks, subtask status lists, and details.
-              </p>
             </div>
             <button
               onClick={handleExportTasks}
@@ -450,9 +435,6 @@ export default function Settings({
             <div>
               <span className="font-mono text-[9px] text-slate-400 uppercase font-bold tracking-wider">Restore Database</span>
               <h4 className="font-bold text-xs uppercase text-slate-800 mt-0.5">Import Task Archive</h4>
-              <p className="text-[11px] text-slate-500 font-body leading-relaxed mt-1">
-                Upload a processed task JSON file to merge or overwrite into browser storage instantly.
-              </p>
             </div>
 
             <div className="space-y-2">
@@ -505,18 +487,12 @@ export default function Settings({
         <h3 className="font-headline text-sm font-bold uppercase text-slate-500 tracking-wider">
           4. Dangerous Cache PURGE
         </h3>
-        <p className="font-body text-xs text-slate-500">
-          The application state resides locally inside current browser storage block (<strong className="text-slate-700">localStorage</strong>). There are currently <strong className="text-slate-700">{totalTasksCount} task item(s)</strong> parsed.
-        </p>
 
         <div className="grid grid-cols-1 gap-4 pt-1">
           {/* Wipe Cache */}
           <div className="p-4 bg-zinc-100 border border-zinc-200 rounded-xl space-y-3 flex flex-col justify-between shadow-sm">
             <div>
               <p className="font-mono text-[10px] text-zinc-650 uppercase font-bold">Dangerous Actions</p>
-              <p className="text-xs text-zinc-850 leading-relaxed font-body mt-1">
-                Destructively purges the local browser cache and clears all task records. Cleans the slate entirely. This action is irreversible.
-              </p>
             </div>
             {showWipeConfirm ? (
               <div className="space-y-2">

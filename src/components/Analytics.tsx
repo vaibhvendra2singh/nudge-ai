@@ -167,9 +167,6 @@ export default function Analytics({ tasks, userName }: AnalyticsProps) {
           <h2 className="font-headline text-lg sm:text-xl font-black text-slate-900 uppercase tracking-tight leading-tight">
             Behavioral Analytics & Risks
           </h2>
-          <p className="font-mono text-[10px] uppercase text-slate-400 font-bold tracking-widest mt-1">
-            Analyzing {userName}'s cognitive execution habits automatically
-          </p>
         </div>
         <button
           onClick={runPatternAnalysis}
@@ -231,9 +228,6 @@ export default function Analytics({ tasks, userName }: AnalyticsProps) {
             <span className="block text-3xl font-extrabold text-black font-headline">
               {completedCount > 0 ? `${onTimePercent}%` : "100%"}
             </span>
-            <span className="block text-[10px] text-slate-500 font-mono font-medium">
-              Completed before task deadline
-            </span>
           </div>
           <div className="p-3 bg-zinc-50 border border-slate-100 rounded-lg">
             <span className="material-symbols-outlined text-black font-bold text-2xl">
@@ -251,9 +245,6 @@ export default function Analytics({ tasks, userName }: AnalyticsProps) {
             <span className="block text-2xl font-black text-black font-headline uppercase tracking-tight truncate">
               {bestTime}
             </span>
-            <span className="block text-[10px] text-slate-500 font-mono font-medium truncate">
-              {completedCount > 0 ? `Highest task release counts: ${bestTime}` : "No completed tasks yet"}
-            </span>
           </div>
         </div>
       </div>
@@ -269,11 +260,6 @@ export default function Analytics({ tasks, userName }: AnalyticsProps) {
               </span>
               <span>Proactive Risk Audit</span>
             </h3>
-            {aiData && (
-              <span className="font-mono text-[8px] uppercase tracking-widest font-extrabold text-slate-400 bg-slate-50 border border-slate-200 px-2 py-0.5 rounded">
-                Live Pattern reasoning
-              </span>
-            )}
           </div>
 
           {loading ? (
@@ -348,10 +334,6 @@ export default function Analytics({ tasks, userName }: AnalyticsProps) {
                 <p className="font-headline font-bold text-sm sm:text-base leading-snug text-white">
                   {aiData?.completionForecast || "Analyzing task velocity..."}
                 </p>
-                <div className="flex items-center gap-1.5 font-mono text-[8px] tracking-wide text-zinc-400 uppercase font-bold pt-1.5 border-t border-zinc-900">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                  <span>Forecast update based on {totalCount} total tracks</span>
-                </div>
               </div>
             )}
           </div>
