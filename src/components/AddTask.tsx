@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Task } from "../types";
+import { getSafeRedirectUrl } from "../supabase";
 
 interface AddTaskProps {
   onAddTask: (newTask: Omit<Task, "id" | "completed" | "subtasks">) => void;
@@ -24,6 +25,7 @@ export default function AddTask({
   // AI Voice task draft state
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState("");
+  const [interimText, setInterimText] = useState("");
   const [speechError, setSpeechError] = useState<React.ReactNode | null>(null);
   const [isProcessingSpeech, setIsProcessingSpeech] = useState(false);
   const [speechSuccessMessage, setSpeechSuccessMessage] = useState<string | null>(null);
@@ -31,69 +33,29 @@ export default function AddTask({
   const [naturalDeadline, setNaturalDeadline] = useState("");
   const [isParsingDeadline, setIsParsingDeadline] = useState(false);
   const audioChunksRef = React.useRef<Blob[]>([]);
-  const [recognitionObj, setRecognitionObj] = useState<any>(null);
+  const recognitionRef = React.useRef<any>(null);
   const [activeEngine, setActiveEngine] = useState<"speech" | "recorder" | null>(null);
+  const [voiceMode, setVoiceMode] = useState<"dictation" | "recorder">("dictation");
   const transcriptRef = React.useRef(transcript);
 
   useEffect(() => {
     transcriptRef.current = transcript;
   }, [transcript]);
 
-  // Initialize SpeechRecognition once on mount just like Settings.tsx for robust mobile support
+  // Autodetect browser support for Web Speech API and default to AI Voice Memo (recorder) if unsupported
   useEffect(() => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    let rec: any = null;
-    if (SpeechRecognition) {
-      try {
-        rec = new SpeechRecognition();
-        rec.continuous = true;
-        rec.interimResults = true;
-        rec.lang = "en-US";
-
-        rec.onresult = (event: any) => {
-          let finalTranscript = "";
-          for (let i = event.resultIndex; i < event.results.length; ++i) {
-            if (event.results[i].isFinal) {
-              finalTranscript += event.results[i][0].transcript;
-            }
-          }
-          if (finalTranscript) {
-            setTranscript((prev) => {
-              const separator = prev && !prev.endsWith(" ") ? " " : "";
-              return prev + separator + finalTranscript;
-            });
-          }
-        };
-
-        rec.onerror = (event: any) => {
-          console.error("Speech recognition error:", event.error);
-          if (event.error === "not-allowed") {
-            setSpeechError(
-              <span className="leading-relaxed block">
-                <strong className="font-bold text-amber-950 block mb-1">Microphone Access Denied</strong>
-                Microphone permission was blocked. Please click the site settings/lock icon in your browser's address bar and grant microphone access.
-              </span>
-            );
-          } else {
-            setSpeechError(`Speech recognition error: ${event.error}`);
-          }
-          setIsListening(false);
-        };
-
-        rec.onend = () => {
-          setIsListening(false);
-        };
-
-        setRecognitionObj(rec);
-      } catch (err) {
-        console.error("SpeechRecognition initialization failed:", err);
-      }
+    if (!SpeechRecognition) {
+      setVoiceMode("recorder");
     }
+  }, []);
 
+  // Stop active speech recognition on unmount to prevent resource locks
+  useEffect(() => {
     return () => {
-      if (rec) {
+      if (recognitionRef.current) {
         try {
-          rec.stop();
+          recognitionRef.current.stop();
         } catch (e) {
           console.error(e);
         }
@@ -134,15 +96,97 @@ export default function AddTask({
     setSpeechError(null);
     setSpeechSuccessMessage(null);
     setTranscript("");
+    setInterimText("");
     audioChunksRef.current = [];
 
-    if (recognitionObj) {
-      try {
-        recognitionObj.start();
-        setIsListening(true);
-        setActiveEngine("speech");
-      } catch (err: any) {
-        console.error("Speech recognition start failed, falling back to MediaRecorder", err);
+    if (voiceMode === "dictation") {
+      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+      if (SpeechRecognition) {
+        try {
+          if (recognitionRef.current) {
+            try {
+              recognitionRef.current.stop();
+            } catch (e) {}
+          }
+
+          const rec = new SpeechRecognition();
+          rec.continuous = true;
+          rec.interimResults = true;
+          rec.lang = "en-US";
+
+          rec.onstart = () => {
+            setIsListening(true);
+            setActiveEngine("speech");
+          };
+
+          rec.onresult = (event: any) => {
+            let finalTranscript = "";
+            let currentInterim = "";
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+              if (event.results[i].isFinal) {
+                finalTranscript += event.results[i][0].transcript;
+              } else {
+                currentInterim += event.results[i][0].transcript;
+              }
+            }
+
+            if (finalTranscript) {
+              setTranscript((prev) => {
+                const separator = prev && !prev.endsWith(" ") ? " " : "";
+                return prev + separator + finalTranscript;
+              });
+              setInterimText("");
+            } else if (currentInterim) {
+              setInterimText(currentInterim);
+            }
+          };
+
+          rec.onerror = (event: any) => {
+            console.error("Speech recognition error:", event.error);
+            if (event.error === "no-speech") {
+              // Ignore temporary silence pauses so we don't abort the dictation session!
+              return;
+            }
+            const isInIframe = typeof window !== "undefined" && window.self !== window.top;
+            if (event.error === "not-allowed" || isInIframe) {
+              setSpeechError(
+                <span className="leading-relaxed block">
+                  <strong className="font-bold text-amber-950 block mb-1">Microphone Blocked by Iframe Sandbox Policy</strong>
+                  The embedded Google AI Studio preview frame restricts microphone access. To use Voice Capture, please open the app in a standalone browser tab using your public link:{" "}
+                  <a 
+                    href={getSafeRedirectUrl()} 
+                    target="_blank" 
+                    rel="noopener noreferrer" 
+                    className="underline font-bold text-black hover:text-slate-800 inline-flex items-center gap-0.5 bg-amber-100/60 px-1 py-0.5 rounded"
+                  >
+                    Open Standalone App <span className="material-symbols-outlined text-[11px]">open_in_new</span>
+                  </a>
+                </span>
+              );
+            } else if (event.error !== "aborted") {
+              setSpeechError(`Speech recognition error: ${event.error}`);
+            }
+            setIsListening(false);
+            setActiveEngine(null);
+          };
+
+          rec.onend = () => {
+            setIsListening(false);
+            setActiveEngine(null);
+            setInterimText("");
+          };
+
+          recognitionRef.current = rec;
+          rec.start();
+        } catch (err: any) {
+          console.error("Speech recognition start failed, falling back to MediaRecorder", err);
+          setVoiceMode("recorder");
+          startMediaRecorderFallback();
+        }
+      } else {
+        setSpeechError("Live Dictation is not fully supported in this browser. Switched to AI Voice Memo mode!");
+        setVoiceMode("recorder");
         startMediaRecorderFallback();
       }
     } else {
@@ -187,7 +231,7 @@ export default function AddTask({
             <strong className="font-bold text-amber-950 block mb-1">Microphone Blocked by Iframe Sandbox Policy</strong>
             The embedded Google AI Studio preview frame restricts microphone access. To use Voice Capture, please open the app in a standalone browser tab using your public link:{" "}
             <a 
-              href="https://nudge-960957466764.asia-southeast1.run.app" 
+              href={getSafeRedirectUrl()} 
               target="_blank" 
               rel="noopener noreferrer" 
               className="underline font-bold text-black hover:text-slate-800 inline-flex items-center gap-0.5 bg-amber-100/60 px-1 py-0.5 rounded"
@@ -212,14 +256,15 @@ export default function AddTask({
   };
 
   const stopListening = () => {
-    if (activeEngine === "speech" && recognitionObj) {
+    if (activeEngine === "speech" && recognitionRef.current) {
       try {
-        recognitionObj.stop();
+        recognitionRef.current.stop();
       } catch (e) {
         console.error(e);
       }
       setIsListening(false);
       setActiveEngine(null);
+      setInterimText("");
       // Wait a tiny bit and extract the task details using Gemini!
       setTimeout(() => {
         handleSpeechExtractTaskDetails();
@@ -237,63 +282,71 @@ export default function AddTask({
     }
 
     // Emergency cleanup fallback
-    if (recognitionObj) {
-      try { recognitionObj.stop(); } catch (e) {}
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch (e) {}
     }
     if (mediaRecorder && mediaRecorder.state !== "inactive") {
       try { mediaRecorder.stop(); } catch (e) {}
     }
     setIsListening(false);
     setActiveEngine(null);
+    setInterimText("");
   };
 
   const processAudioTask = async (audioBlob: Blob, mimeType: string) => {
     setIsProcessingSpeech(true);
     setSpeechError(null);
     setSpeechSuccessMessage(null);
+    setTranscript("");
 
     try {
       const reader = new FileReader();
       reader.readAsDataURL(audioBlob);
       reader.onloadend = async () => {
-        const base64data = reader.result?.toString().split(",")[1];
-        if (!base64data) throw new Error("Failed to encode audio");
+        try {
+          const base64data = reader.result?.toString().split(",")[1];
+          if (!base64data) throw new Error("Failed to encode audio");
 
-        const response = await fetch("/api/gemini/voice-task-audio", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            audioData: base64data,
-            mimeType: mimeType || "audio/webm",
-            currentDate: new Date().toISOString(),
-          }),
-        });
+          const response = await fetch("/api/gemini/voice-task-audio", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              audioData: base64data,
+              mimeType: mimeType || "audio/webm",
+              currentDate: new Date().toISOString(),
+            }),
+          });
 
-        if (!response.ok) {
-          throw new Error("Server extraction request failed.");
-        }
-
-        const extracted = await response.json();
-        if (extracted) {
-          if (extracted.transcript) setTranscript(extracted.transcript);
-          if (extracted.title) setTitle(extracted.title.toUpperCase());
-          if (extracted.details) setDetails(extracted.details);
-          if (extracted.priority) setPriority(extracted.priority);
-          if (extracted.deadline) setDeadline(extracted.deadline);
-          if (extracted.timeSlot) setTimeSlot(extracted.timeSlot);
-          if (extracted.project) {
-            setProject(extracted.project);
-            if (!availableTags.includes(extracted.project)) {
-              setAvailableTags((prev) => [...prev, extracted.project]);
-            }
+          if (!response.ok) {
+            throw new Error("Server extraction request failed.");
           }
-          setSpeechSuccessMessage("Magic AI Extraction Complete! Review your active form options below.");
+
+          const extracted = await response.json();
+          if (extracted) {
+            if (extracted.transcript) setTranscript(extracted.transcript);
+            if (extracted.title) setTitle(extracted.title.toUpperCase());
+            if (extracted.details) setDetails(extracted.details);
+            if (extracted.priority) setPriority(extracted.priority);
+            if (extracted.deadline) setDeadline(extracted.deadline);
+            if (extracted.timeSlot) setTimeSlot(extracted.timeSlot);
+            if (extracted.project) {
+              setProject(extracted.project);
+              if (!availableTags.includes(extracted.project)) {
+                setAvailableTags((prev) => [...prev, extracted.project]);
+              }
+            }
+            setSpeechSuccessMessage("Magic AI Extraction Complete! Review your active form options below.");
+          }
+        } catch (err: any) {
+          console.error("FileReader onloadend error:", err);
+          setSpeechError("AI couldn't process the audio correctly: " + (err.message || ""));
+        } finally {
+          setIsProcessingSpeech(false);
         }
       };
     } catch (err: any) {
-      console.error(err);
-      setSpeechError("AI couldn't process the audio correctly. " + (err.message || ""));
-    } finally {
+      console.error("Reader setup error:", err);
+      setSpeechError("Failed to prepare audio clip for processing: " + (err.message || ""));
       setIsProcessingSpeech(false);
     }
   };
@@ -479,7 +532,7 @@ export default function AddTask({
 
         {/* Voice Extraction Bento Block */}
         <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-5 shadow-sm space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/50 pb-3">
             <div className="flex items-center gap-2">
               <span className="material-symbols-outlined text-[20px] text-slate-800 font-bold">settings_voice</span>
               <span className="font-mono text-[10px] uppercase tracking-widest text-slate-700 font-bold">
@@ -503,7 +556,51 @@ export default function AddTask({
             )}
           </div>
 
-          <div className="flex items-start gap-4">
+          {/* Engine Selector */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex bg-slate-200/60 p-1 rounded-xl w-fit">
+              <button
+                type="button"
+                onClick={() => {
+                  setVoiceMode("dictation");
+                  setSpeechError(null);
+                }}
+                disabled={isListening}
+                className={`px-3 py-1.5 rounded-lg text-[10px] font-mono uppercase tracking-wider font-bold transition-all flex items-center gap-1.5 ${
+                  voiceMode === "dictation"
+                    ? "bg-white text-slate-800 shadow-sm"
+                    : "text-slate-500 hover:text-slate-700"
+                } disabled:opacity-50 cursor-pointer`}
+              >
+                <span className="material-symbols-outlined text-[13px]">chat_bubble_outline</span>
+                Live Dictation
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setVoiceMode("recorder");
+                  setSpeechError(null);
+                }}
+                disabled={isListening}
+                className={`px-3 py-1.5 rounded-lg text-[10px] font-mono uppercase tracking-wider font-bold transition-all flex items-center gap-1.5 ${
+                  voiceMode === "recorder"
+                    ? "bg-white text-slate-800 shadow-sm"
+                    : "text-slate-500 hover:text-slate-700"
+                } disabled:opacity-50 cursor-pointer`}
+              >
+                <span className="material-symbols-outlined text-[13px]">mic</span>
+                AI Voice Memo
+              </button>
+            </div>
+            
+            <div className="text-[10px] font-mono text-slate-400 max-w-xs text-right sm:block hidden">
+              {voiceMode === "dictation" 
+                ? "Types text instantly on-screen. Best for fast, quiet environments." 
+                : "Records high-fidelity audio, then translates with full Gemini accuracy."}
+            </div>
+          </div>
+
+          <div className="flex items-start gap-4 pt-1">
             <button
               type="button"
               onClick={isListening ? stopListening : startListening}
@@ -521,14 +618,17 @@ export default function AddTask({
 
             <div className="flex-1 space-y-2">
               {/* Editable Transcription preview */}
-              {(transcript || isListening) && (
+              {(transcript || interimText || isListening) && (
                 <div className="space-y-1.5 mt-2 animate-fade-in text-left">
                   <label className="block font-mono text-[9px] uppercase tracking-wider text-slate-400 font-bold">
                     Captured Natural Transcript
                   </label>
                   <textarea
-                    value={transcript}
-                    onChange={(e) => setTranscript(e.target.value)}
+                    value={transcript + (interimText ? (transcript && !transcript.endsWith(" ") ? " " : "") + interimText : "")}
+                    onChange={(e) => {
+                      setTranscript(e.target.value);
+                      setInterimText("");
+                    }}
                     placeholder={isListening ? "Listening... start speaking naturally..." : "Edit transcription text here if needed..."}
                     rows={2}
                     className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-base sm:text-xs text-slate-700 font-sans focus:outline-none focus:ring-1 focus:ring-black min-h-[44px]"

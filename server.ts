@@ -480,6 +480,12 @@ app.post("/api/gemini/voice-task-audio", async (req: express.Request, res: expre
   }
 
   try {
+    // Sanitize the mimeType by removing extra parameters like ;codecs=opus which cause Gemini errors
+    let cleanMimeType = mimeType.split(";")[0].trim();
+    if (!cleanMimeType) {
+      cleanMimeType = "audio/webm";
+    }
+
     const prompt = `You are an intelligent scheduler assistant. 
 Accurately transcribe the attached audio clip, and extract task parameters from it. 
 Always resolve relative dates (like 'tomorrow', 'next week', 'Friday') into valid YYYY-MM-DD strings based on the given currentDate reference. Give concise responses.
@@ -516,7 +522,7 @@ Return a JSON object exactly fitting the schema. Include a 'transcript' property
     const contents = [
       {
         inlineData: {
-          mimeType,
+          mimeType: cleanMimeType,
           data: audioData
         }
       },

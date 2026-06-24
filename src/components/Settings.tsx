@@ -428,7 +428,7 @@ export default function Settings({
                           <strong>The Cause:</strong> The URL starting with <code className="bg-amber-100 px-1 py-0.5 rounded text-[10px]">ais-dev-...</code> is a private developer URL. It only works inside your Google AI Studio editor. Any other device (like your phone or another browser tab) is not authorized and will receive a Google Cloud Run <strong>"404 Page not found"</strong> page.
                         </li>
                         <li>
-                          <strong>The Solution:</strong> You should use your public production URL <code className="bg-amber-100 px-1.5 py-0.5 rounded text-[10px] text-amber-950 font-semibold">https://nudge-960957466764.asia-southeast1.run.app</code> or the safe preview URL starting with <code className="bg-amber-100 px-1.5 py-0.5 rounded text-[10px] text-amber-950 font-semibold">ais-pre-...</code>!
+                          <strong>The Solution:</strong> You should use your public production URL <code className="bg-amber-100 px-1.5 py-0.5 rounded text-[10px] text-amber-950 font-semibold">{getSafeRedirectUrl()}</code> or the safe preview URL starting with <code className="bg-amber-100 px-1.5 py-0.5 rounded text-[10px] text-amber-950 font-semibold">ais-pre-...</code>!
                         </li>
                       </ul>
 
@@ -443,13 +443,13 @@ export default function Settings({
                           <li>
                             Change the <strong>Site URL</strong> field to exactly:
                             <div className="mt-1 p-2.5 bg-white border border-amber-200 rounded-lg font-mono text-[10px] select-all break-all text-slate-900 font-bold bg-amber-50/50 border-dashed">
-                              https://nudge-960957466764.asia-southeast1.run.app
+                              {getSafeRedirectUrl()}
                             </div>
                           </li>
                           <li>
                             In the <strong>Redirect URLs</strong> section below it, click <strong>Add URL</strong> and add both of these exact URLs:
                             <div className="mt-1 p-2.5 bg-white border border-amber-200 rounded-lg font-mono text-[10px] select-all break-all text-slate-900 font-bold bg-amber-50/50 border-dashed space-y-1.5">
-                              <div>https://nudge-960957466764.asia-southeast1.run.app</div>
+                              <div>{getSafeRedirectUrl()}</div>
                               <div>{window.location.origin.replace("ais-dev-", "ais-pre-")}</div>
                             </div>
                           </li>
@@ -457,7 +457,7 @@ export default function Settings({
                       </div>
                       
                       <div className="bg-amber-100/50 p-2.5 rounded-lg border border-amber-200 text-[11px] text-amber-950 font-medium">
-                        💡 <strong>After Saving:</strong> Access the app through <a href="https://nudge-960957466764.asia-southeast1.run.app" target="_blank" rel="noopener noreferrer" className="text-amber-950 underline font-bold">https://nudge-960957466764.asia-southeast1.run.app</a> on your phone, and sign in. It will redirect perfectly and connect your account without any 404 errors!
+                        💡 <strong>After Saving:</strong> Access the app through <a href={getSafeRedirectUrl()} target="_blank" rel="noopener noreferrer" className="text-amber-950 underline font-bold">{getSafeRedirectUrl()}</a> on your phone, and sign in. It will redirect perfectly and connect your account without any 404 errors!
                       </div>
                     </div>
                   )}
