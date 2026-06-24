@@ -170,7 +170,7 @@ export default function Analytics({ tasks, userName }: AnalyticsProps) {
         </div>
         <button
           onClick={runPatternAnalysis}
-          disabled={loading}
+          disabled={loading || totalCount === 0}
           className="flex items-center gap-1.5 px-3.5 py-2 border border-slate-200 bg-white hover:border-black active:bg-slate-50 transition-all font-mono text-[10px] font-bold uppercase tracking-wider rounded-lg shadow-sm cursor-pointer disabled:opacity-50"
         >
           <span className={`material-symbols-outlined text-[14px] ${loading ? "animate-spin" : ""}`}>
@@ -180,8 +180,39 @@ export default function Analytics({ tasks, userName }: AnalyticsProps) {
         </button>
       </div>
 
+      {totalCount === 0 && (
+        <div className="bg-slate-900 text-white p-6 rounded-xl shadow-lg border border-slate-800 space-y-4">
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-2xl text-emerald-400">rocket_launch</span>
+            <h3 className="font-headline text-lg font-bold uppercase tracking-widest">
+              Welcome to Nudge
+            </h3>
+          </div>
+          <p className="font-mono text-xs sm:text-sm text-slate-300 leading-relaxed max-w-2xl">
+            You haven't added any tasks yet. To get the most out of Nudge's predictive analytics and AI risk tracking, start by adding a few tasks to your dashboard. 
+          </p>
+          <div className="pt-2">
+            <p className="font-mono text-[10px] font-bold uppercase text-emerald-400 tracking-wider">Here's what to focus on today:</p>
+            <ul className="mt-3 space-y-2 font-mono text-[11px] text-slate-400">
+              <li className="flex items-center gap-2">
+                <span className="w-1 h-1 bg-slate-500 rounded-full"></span>
+                Add your top 3 priorities for the day.
+              </li>
+              <li className="flex items-center gap-2">
+                <span className="w-1 h-1 bg-slate-500 rounded-full"></span>
+                Use the AI Breakdown feature on a complex task.
+              </li>
+              <li className="flex items-center gap-2">
+                <span className="w-1 h-1 bg-slate-500 rounded-full"></span>
+                Set clear deadlines so Nudge can warn you before they expire.
+              </li>
+            </ul>
+          </div>
+        </div>
+      )}
+
       {/* CORE STATS OVERVIEW DECK */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className={`grid grid-cols-1 sm:grid-cols-3 gap-4 ${totalCount === 0 ? 'opacity-40 grayscale pointer-events-none' : ''}`}>
         {/* Metric 1 - Completion Rate */}
         <div className="bg-white border border-slate-200 p-5 rounded-xl shadow-sm flex items-center justify-between">
           <div className="space-y-1">
@@ -321,8 +352,7 @@ export default function Analytics({ tasks, userName }: AnalyticsProps) {
           {/* Top: Quantitative Forecast */}
           <div className="bg-black text-white p-5 rounded-xl shadow-lg space-y-3 shrink-0">
             <h4 className="font-headline font-bold text-[10px] uppercase tracking-widest text-zinc-400 flex items-center gap-1.5">
-              <span className="material-symbols-outlined text-sm text-amber-400">online_prediction</span>
-              <span>Predicted Forecast (Next 7 Days)</span>
+              <span>Your Outlook for the Week Ahead</span>
             </h4>
             {loading ? (
               <div className="py-4 space-y-2">

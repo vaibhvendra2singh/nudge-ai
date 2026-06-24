@@ -11,6 +11,7 @@ export interface Task {
   priority: 'low' | 'medium' | 'high';
   deadline: string; // YYYY-MM-DD template
   completed: boolean;
+  archived?: boolean;
   project: string; // "Work", "Personal", "Marketing Campaign", etc.
   timeSlot?: string; // "09:00", "14:30", "18:00", "Custom"
   subtasks: SubTask[];

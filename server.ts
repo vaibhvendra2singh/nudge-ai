@@ -136,7 +136,7 @@ function getLocalFallbackNudge(title: string, priority: string, deadline: string
 }
 
 // Call Gemini generateContent API with robust retry mechanism and backup model fallbacks
-async function callGeminiWithFallback(contents: string, config: any): Promise<any> {
+async function callGeminiWithFallback(contents: string | any[], config: any): Promise<any> {
   const ai = getAiClient();
   
   // Try 1: Main 'gemini-3.5-flash' model
@@ -228,7 +228,7 @@ Return a list of strictly 3 to 5 clear, concrete, and highly actionable subtask 
 
 // 2. API Route: Intelligent "Urgent Nudge"
 app.post("/api/nudge", async (req: express.Request, res: express.Response): Promise<void> => {
-  const { title, details, priority, deadline, subtasks, hoursLeft } = req.body;
+  const { title, details, priority, deadline, subtasks, hoursLeft, currentTime, otherUrgentTasksCount } = req.body;
   if (!title) {
     res.status(400).json({ error: "Task title is required." });
     return;
@@ -239,14 +239,21 @@ app.post("/api/nudge", async (req: express.Request, res: express.Response): Prom
       ? `Subtasks remaining:\n${subtasks.map((s: any) => `- [ ] ${s.title}`).join("\n")}`
       : "No subtasks structured yet.";
 
+    let workloadContext = "";
+    if (otherUrgentTasksCount !== undefined && otherUrgentTasksCount > 0) {
+      workloadContext = `User Workload Context: The user has ${otherUrgentTasksCount} OTHER urgent tasks pending right now. Frame this as managing a heavy workload intelligently.`;
+    }
+
     const prompt = `This task is highly urgent and due very soon! Provide an authentic, direct, motivational nudge/alert.
 Task: ${title} (Priority: ${priority || "medium"})
 Details: ${details || "No other details."}
 Deadline: ${deadline || "Not specified."}
 Time Left: ${hoursLeft ? `${hoursLeft} hours left` : "less than 24 hours left"}
+Current Time of user: ${currentTime || "Unknown"}
+${workloadContext}
 ${subtaskStatus}
 
-Provide an authentic, zero-fluff, non-generic, high-agency 1-sentence reasons why this matters right now. Do not use generic clichés or corporate jargon.`;
+Provide an authentic, zero-fluff, non-generic, high-agency 1-sentence reason why this matters right now and how to tackle it given their workload. Do not use generic clichés or corporate jargon.`;
 
     const config = {
       systemInstruction: "You are a sharp, direct human assistant. Give one clear, specific reason why this task matters right now, using the task's title, description, and deadline as context. Do NOT use generic business jargon (e.g., do NOT say 'high density block', 'checkout releases', 'synergic paradigms', etc.). Speak directly, concisely, and with high-agency human urgency. Limit the response to exactly 1 clear sentence.",
@@ -416,6 +423,122 @@ Respond with valid JSON exactly fitting the schema.`;
   }
 });
 
+app.post("/api/gemini/parse-deadline", async (req: express.Request, res: express.Response): Promise<void> => {
+  const { text, currentDate } = req.body;
+  if (!text) {
+    res.status(400).json({ error: "No text provided" });
+    return;
+  }
+  
+  try {
+    const prompt = `You are a scheduling AI assistant.
+Current date reference: ${currentDate || new Date().toISOString()}
+
+Analyze this task description: "${text}"
+
+Your goal is to extract OR suggest a realistic deadline.
+1. If the user explicitly mentions a deadline (e.g. "by Friday", "tomorrow at 3pm"), parse that exact date and time.
+2. If the user does NOT mention a deadline (e.g. "Write the Q3 report", "Buy groceries"), estimate a realistic deadline based on how long the task typically takes, and suggest a date/time (e.g., today at 17:00 for simple tasks, or a few days later for complex ones).
+If time is not specified, default to 17:00.
+
+Return a JSON object with 'deadline' (YYYY-MM-DD format) and 'timeSlot' (HH:MM format in 24-hour time).`;
+
+    const config = {
+      systemInstruction: "You strictly output JSON dates and times.",
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          deadline: { type: Type.STRING, description: "YYYY-MM-DD format" },
+          timeSlot: { type: Type.STRING, description: "HH:MM format" }
+        },
+        required: ["deadline", "timeSlot"]
+      }
+    };
+
+    const response = await callGeminiWithFallback(prompt, config);
+    if (response && response.text) {
+      const data = cleanAndParseJSON(response.text);
+      if (data && data.deadline) {
+        res.json(data);
+        return;
+      }
+    }
+    res.status(500).json({ error: "Failed to parse deadline." });
+  } catch (err: any) {
+    console.error("Error parsing deadline:", err);
+    res.status(500).json({ error: "Failed to parse deadline." });
+  }
+});
+
+app.post("/api/gemini/voice-task-audio", async (req: express.Request, res: express.Response): Promise<void> => {
+  const { audioData, mimeType, currentDate } = req.body;
+  
+  if (!audioData || !mimeType) {
+    res.status(400).json({ error: "Missing audioData or mimeType" });
+    return;
+  }
+
+  try {
+    const prompt = `You are an intelligent scheduler assistant. 
+Accurately transcribe the attached audio clip, and extract task parameters from it. 
+Always resolve relative dates (like 'tomorrow', 'next week', 'Friday') into valid YYYY-MM-DD strings based on the given currentDate reference. Give concise responses.
+Current Date Reference: ${currentDate || new Date().toISOString()}
+
+We need to fill the following task properties:
+1. title: A short, active, capitalized task objective (e.g. "Call the dentist").
+2. details: Any supplementary information or context spoken.
+3. deadline: Specific target date in YYYY-MM-DD format.
+4. timeSlot: HH:MM format (e.g. "17:00" if spoken "5pm", default to "14:30").
+5. priority: One of "low", "medium", "high".
+6. project: One of "Work", "Personal", "Deep Work", "Marketing" or custom brief context tag.
+
+Return a JSON object exactly fitting the schema. Include a 'transcript' property containing the exact text you heard.`;
+
+    const config = {
+      systemInstruction: "You are an intelligent scheduler assistant. Transcribe the audio and extract task data.",
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          transcript: { type: Type.STRING, description: "The exact transcript of the audio" },
+          title: { type: Type.STRING, description: "Capitalized short actionable title." },
+          details: { type: Type.STRING, description: "Clean context or additional instructions." },
+          deadline: { type: Type.STRING, description: "YYYY-MM-DD date string." },
+          timeSlot: { type: Type.STRING, description: "HH:MM format time slot." },
+          priority: { type: Type.STRING, description: "Must be 'low', 'medium', or 'high'." },
+          project: { type: Type.STRING, description: "The project tag name." }
+        },
+        required: ["transcript", "title", "details", "deadline", "timeSlot", "priority", "project"]
+      }
+    };
+
+    const contents = [
+      {
+        inlineData: {
+          mimeType,
+          data: audioData
+        }
+      },
+      { text: prompt }
+    ];
+
+    const response = await callGeminiWithFallback(contents, config);
+    if (response && response.text) {
+      const data = cleanAndParseJSON(response.text);
+      if (data && data.title) {
+        res.json(data);
+        return;
+      }
+    }
+
+    res.status(500).json({ error: "Failed to extract data from audio." });
+  } catch (error: any) {
+    console.error("Error processing audio in /api/gemini/voice-task-audio", error);
+    res.status(500).json({ error: "Internal error processing audio." });
+  }
+});
+
 // Helper interfaces for Pattern Analysis
 interface RiskWarning {
   type: string;
@@ -438,8 +561,8 @@ function getLocalPatternAnalysis(tasks: any[], currentDateRef: string): Analysis
   };
 
   if (!tasks || tasks.length === 0) {
-    result.generalInsights.push("No tasks recorded yet. Add some tasks to begin habit pattern analysis.");
-    result.completionForecast = "Input tasks to generate completion forecasts.";
+    result.generalInsights.push("No tasks recorded yet. Add some tasks to get insights on your habits.");
+    result.completionForecast = "Add some tasks to see how your week is shaping up.";
     return result;
   }
 
@@ -472,8 +595,8 @@ function getLocalPatternAnalysis(tasks: any[], currentDateRef: string): Analysis
       if (completionRate < 0.6) {
         result.riskWarnings.push({
           type: "pattern-violation",
-          message: `You've missed ${stats.total - stats.completed} of ${stats.total} tasks due on ${daysOfWeek[day]}s.`,
-          recommendation: `Consider breaking down ${daysOfWeek[day]} tasks earlier, ideally on ${daysOfWeek[(day + 5) % 7]}s.`
+          message: `You've missed ${stats.total - stats.completed} out of ${stats.total} tasks due on ${daysOfWeek[day]}s.`,
+          recommendation: `Try tackling these ${daysOfWeek[day]} tasks earlier in the week, maybe on ${daysOfWeek[(day + 5) % 7]}s.`
         });
       }
     }
@@ -487,8 +610,8 @@ function getLocalPatternAnalysis(tasks: any[], currentDateRef: string): Analysis
     if (highCompletionRate < 0.5) {
       result.riskWarnings.push({
         type: "delay-risk",
-        message: `High-priority items are lagging. Only ${completedHigh} of ${highPriorityTasks.length} high-priority tasks are completed.`,
-        recommendation: "Flag high-priority tasks to be tackled first thing in the morning before starting secondary tasks."
+        message: `Your high-priority items are piling up. You've only finished ${completedHigh} out of ${highPriorityTasks.length} so far.`,
+        recommendation: "Try to tackle your highest priority tasks first thing in the morning before other things distract you."
       });
     }
   }
@@ -508,8 +631,8 @@ function getLocalPatternAnalysis(tasks: any[], currentDateRef: string): Analysis
       const dateReadable = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
       result.riskWarnings.push({
         type: "overload",
-        message: `Workload congestion: You have ${count} active remaining tasks due on ${dateReadable}.`,
-        recommendation: "Reschedule or delegate at least two of these tasks to distribute your focus."
+        message: `It looks like you have a lot on your plate for ${dateReadable} (${count} tasks).`,
+        recommendation: "Consider rescheduling or delegating a couple of these tasks to spread out your workload."
       });
     }
   });
@@ -519,7 +642,7 @@ function getLocalPatternAnalysis(tasks: any[], currentDateRef: string): Analysis
   const completedTasks = tasks.filter(t => t.completed).length;
   const pct = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
 
-  result.generalInsights.push(`Overall completion rate is ${pct}% (${completedTasks} of ${totalTasks} tasks finished).`);
+  result.generalInsights.push(`You've finished ${completedTasks} out of ${totalTasks} tasks. That's a completion rate of ${pct}%.`);
 
   // Most active project category
   const categoriesCount: Record<string, number> = {};
@@ -552,10 +675,10 @@ function getLocalPatternAnalysis(tasks: any[], currentDateRef: string): Analysis
   });
 
   if (mostActiveCategory) {
-    result.generalInsights.push(`Your highest focus area by volume is "${mostActiveCategory}" with ${maxCount} items.`);
+    result.generalInsights.push(`You spend most of your time on "${mostActiveCategory}", with ${maxCount} items listed there.`);
   }
   if (bestCategory && bestRate > 0.5) {
-    result.generalInsights.push(`Best execution performance: "${bestCategory}" tasks have a ${Math.round(bestRate * 100)}% completion rate.`);
+    result.generalInsights.push(`You're doing great with "${bestCategory}" tasks! You've completed ${Math.round(bestRate * 100)}% of them.`);
   }
 
   // Morning habit insight
@@ -566,16 +689,16 @@ function getLocalPatternAnalysis(tasks: any[], currentDateRef: string): Analysis
   });
   if (morningTasks.length >= 2) {
     const completedMorning = morningTasks.filter(t => t.completed).length;
-    result.generalInsights.push(`Morning execution check: you complete ${Math.round((completedMorning / morningTasks.length) * 100)}% of focus-slotted morning tasks.`);
+    result.generalInsights.push(`Morning check-in: you typically finish ${Math.round((completedMorning / morningTasks.length) * 100)}% of tasks scheduled for the morning.`);
   }
 
   // Forecast
   if (pct >= 80) {
-    result.completionForecast = "Exceptional performance: High probability of complete task resolution for the upcoming week.";
+    result.completionForecast = "You're doing fantastic! You have a high chance of finishing all your goals for the week.";
   } else if (pct >= 50) {
-    result.completionForecast = "Steady pace: On track to complete most tasks. Address pending high-priority actions to avoid congestion.";
+    result.completionForecast = "You're making steady progress. Knock out those pending high-priority tasks and you'll be in great shape.";
   } else {
-    result.completionForecast = "Attention required: Low completion velocity suggests risk of backlog spillover. Recommend trimming scope.";
+    result.completionForecast = "It might be a busy week ahead. Try breaking some larger tasks down to build up your momentum.";
   }
 
   // Ensure we always have at least one risk warning if tasks exist to look sophisticated
@@ -584,8 +707,8 @@ function getLocalPatternAnalysis(tasks: any[], currentDateRef: string): Analysis
     if (incomplete.length > 0) {
       result.riskWarnings.push({
         type: "coordination",
-        message: `Currently managing ${incomplete.length} active deliverable paths concurrently.`,
-        recommendation: "Limit active work-in-progress to three tasks to preserve attention span density."
+        message: `You currently have ${incomplete.length} tasks going on right now.`,
+        recommendation: "Try to limit your active focus to just two or three things at a time."
       });
     }
   }
@@ -615,20 +738,20 @@ app.post("/api/gemini/analyze-patterns", async (req: express.Request, res: expre
       timeSlot: t.timeSlot || ""
     })));
 
-    const prompt = `Analyze the user's focus execution patterns and task habits across these items:
+    const prompt = `Analyze the user's task habits and progress based on these items:
 ${payloadStr}
 
 Current Date reference context: ${currentDateRef}
 
 Requirements:
-1. Provide proactive risk warnings if you detect dangerous patterns (e.g. overload on a single day, lagging high priority tasks, or recurring trends such as missed deadlines on specific weekdays). Keep it realistic and direct.
-2. Provide general insights regarding positive habits, ideal time slots, or high volume areas.
-3. Provide a qualitative forecast for the upcoming week.
+1. Provide proactive risk warnings if you see something concerning (e.g., too many tasks on one day, missed deadlines on Fridays). Speak like a helpful coach, keeping it realistic and direct.
+2. Share general insights about their positive habits, ideal times for getting things done, or areas where they're doing a lot.
+3. Give a qualitative forecast for the upcoming week in plain, conversational English.
 
-Return valid JSON conforming exactly to the requested schema. Do not use generic clichés or corporate jargon.`;
+Return valid JSON conforming exactly to the requested schema. Use normal, conversational human English. Do not sound like a robot or use corporate jargon.`;
 
     const config = {
-      systemInstruction: "You are an Elite Behavioral Analytics AI. Your core specialty is analyzing lists of tasks (both completed and pending), identifying non-obvious human behavioral patterns, procrastinations, day-of-week risk spikes, and workload congestion issues. You generate highly objective, zero-fluff, actionable predictive warnings and motivational habits insights. Speak directly, and avoid any generic business jargon or platitudes. Do NOT use fake, generic phrases (e.g. 'synergistic metrics').",
+      systemInstruction: "You are a friendly, insightful productivity coach. Your specialty is analyzing a user's task list and providing helpful observations about their habits, procrastination risks, and workload. Use normal, conversational human English. Speak directly and warmly, like a real person offering advice. Avoid sounding robotic, overly formal, or using dry, analytical jargon (e.g., avoid terms like 'low-velocity area item', 'fatigue interference', or 'utilizing').",
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.OBJECT,
@@ -680,6 +803,64 @@ Return valid JSON conforming exactly to the requested schema. Do not use generic
     console.error("Unhandled error in /api/gemini/analyze-patterns, utilizing local fallback engine:", error);
     const fallbackData = getLocalPatternAnalysis(tasks, currentDateRef);
     res.json(fallbackData);
+  }
+});
+
+// 6. API Route: General AI Chatbot
+app.post("/api/gemini/chat", async (req: express.Request, res: express.Response): Promise<void> => {
+  const { messages } = req.body;
+  if (!messages || !Array.isArray(messages)) {
+    res.status(400).json({ error: "Messages array is required." });
+    return;
+  }
+
+  try {
+    const ai = getAiClient();
+    
+    // Format history for Gemini API. We expect messages to have role: "user" | "model"
+    const history = messages.slice(0, -1).map(msg => ({
+      role: msg.role === "user" ? "user" : "model",
+      parts: [{ text: msg.content }]
+    }));
+    
+    const latestMessage = messages[messages.length - 1]?.content || "";
+
+    const chatSession = await ai.chats.create({
+      model: "gemini-3.5-flash",
+      history,
+      config: {
+        systemInstruction: "You are an AI assistant built into Nudge, a productivity and task management app. Keep your answers concise, helpful, and direct. You can help the user organize thoughts, plan their day, or discuss task execution.",
+      }
+    });
+
+    const result = await chatSession.sendMessage({
+      message: latestMessage
+    });
+
+    res.json({ reply: result.text });
+  } catch (error: any) {
+    console.error("Chat API Error:", error?.message || error);
+    // Fallback if the main model fails
+    try {
+      const ai = getAiClient();
+      const history = messages.slice(0, -1).map(msg => ({
+        role: msg.role === "user" ? "user" : "model",
+        parts: [{ text: msg.content }]
+      }));
+      const latestMessage = messages[messages.length - 1]?.content || "";
+      const chatSession = await ai.chats.create({
+        model: "gemini-3.1-flash-lite",
+        history,
+        config: {
+          systemInstruction: "You are an AI assistant built into Nudge, a productivity and task management app. Keep your answers concise, helpful, and direct.",
+        }
+      });
+      const result = await chatSession.sendMessage({ message: latestMessage });
+      res.json({ reply: result.text });
+    } catch (fallbackError) {
+      console.error("Fallback Chat API Error:", fallbackError);
+      res.status(500).json({ error: "I'm having trouble connecting right now. Please try again later." });
+    }
   }
 });
 

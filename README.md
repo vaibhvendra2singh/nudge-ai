@@ -70,6 +70,18 @@ Instead of showing plain task cards, Nudge evaluates deadline proximity and uses
 
 ---
 
+## Installation (Progressive Web App)
+
+Nudge is built as a Progressive Web App (PWA) and can be installed directly to your device for an app-like experience.
+
+- **On Android Chrome**: Tap the three-dot menu → "Add to Home Screen" OR tap the install banner when it appears at the bottom of the screen.
+- **On iOS Safari**: Tap the Share button <span class="material-symbols-outlined text-[12px] inline-block align-middle">ios_share</span> → "Add to Home Screen".
+- **On desktop Chrome/Edge**: Click the install icon in the address bar on the right side.
+
+Once installed, the app works offline for core features (saving and viewing tasks). Note that AI features (such as smart breakdown and nudges) require an internet connection.
+
+---
+
 ## Technical Stack & Architecture
 
 ```

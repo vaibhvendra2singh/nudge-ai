@@ -1,19 +1,14 @@
 import React, { useState, useEffect } from "react";
 import { Task } from "../types";
-import { CalendarEvent, checkDeadlineConflicts } from "../calendarService";
 
 interface AddTaskProps {
   onAddTask: (newTask: Omit<Task, "id" | "completed" | "subtasks">) => void;
   onCancel: () => void;
-  gcalEvents?: CalendarEvent[];
-  gcalConnected?: boolean;
 }
 
 export default function AddTask({ 
   onAddTask, 
   onCancel,
-  gcalEvents = [],
-  gcalConnected = false,
 }: AddTaskProps) {
   const [title, setTitle] = useState("");
   const [details, setDetails] = useState("");
@@ -31,88 +26,141 @@ export default function AddTask({
   const [transcript, setTranscript] = useState("");
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [isProcessingSpeech, setIsProcessingSpeech] = useState(false);
-  const [recognitionObj, setRecognitionObj] = useState<any>(null);
   const [speechSuccessMessage, setSpeechSuccessMessage] = useState<string | null>(null);
+  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
+  const [naturalDeadline, setNaturalDeadline] = useState("");
+  const [isParsingDeadline, setIsParsingDeadline] = useState(false);
+  const audioChunksRef = React.useRef<Blob[]>([]);
 
-  // Initialize SpeechRecognition safely on mount
-  useEffect(() => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      const rec = new SpeechRecognition();
-      rec.continuous = true;
-      rec.interimResults = true;
-      rec.lang = "en-US";
-
-      rec.onresult = (event: any) => {
-        let finalTranscript = "";
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          if (event.results[i].isFinal) {
-            finalTranscript += event.results[i][0].transcript;
-          }
-        }
-        if (finalTranscript) {
-          setTranscript((prev) => {
-            const separator = prev && !prev.endsWith(" ") ? " " : "";
-            return prev + separator + finalTranscript;
-          });
-        }
-      };
-
-      rec.onerror = (event: any) => {
-        console.error("Speech recognition error:", event.error);
-        if (event.error === "not-allowed") {
-          setSpeechError("Microphone access is not allowed. Please allow microphone permissions in your browser.");
-        } else {
-          setSpeechError(`Microphone error: ${event.error}`);
-        }
-        setIsListening(false);
-      };
-
-      rec.onend = () => {
-        setIsListening(false);
-      };
-
-      setRecognitionObj(rec);
+  const handleParseDeadline = async () => {
+    if (!naturalDeadline.trim()) return;
+    setIsParsingDeadline(true);
+    setErrorMessage(null);
+    try {
+      const response = await fetch("/api/gemini/parse-deadline", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: naturalDeadline,
+          currentDate: new Date().toISOString()
+        })
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data.deadline) setDeadline(data.deadline);
+        if (data.timeSlot) setTimeSlot(data.timeSlot);
+        setNaturalDeadline("");
+      } else {
+        throw new Error("Failed to parse deadline.");
+      }
+    } catch (err) {
+      console.error(err);
+      setErrorMessage("Could not parse deadline from text. Please use date picker.");
+    } finally {
+      setIsParsingDeadline(false);
     }
-  }, []);
+  };
 
-  const startListening = () => {
-    if (!recognitionObj) {
-      setSpeechError("Speech recognition is not supported in this browser. Please try Chrome, Edge or Safari.");
-      return;
-    }
+  const startListening = async () => {
     setSpeechError(null);
     setSpeechSuccessMessage(null);
     setTranscript("");
+    audioChunksRef.current = [];
+
     try {
-      recognitionObj.start();
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          audioChunksRef.current.push(e.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType });
+        await processAudioTask(audioBlob, recorder.mimeType);
+        // Stop all tracks
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      recorder.start();
+      setMediaRecorder(recorder);
       setIsListening(true);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setSpeechError("Failed to initiate microphone stream recording.");
+      if (err.name === "NotAllowedError" || err.name === "SecurityError") {
+        setSpeechError("Microphone access is not allowed. Please allow microphone permissions in your browser.");
+      } else {
+        setSpeechError("Failed to initiate microphone stream recording. " + err.message);
+      }
+      setIsListening(false);
     }
   };
 
   const stopListening = () => {
-    if (recognitionObj) {
-      try {
-        recognitionObj.stop();
-      } catch (err) {
-        console.error(err);
-      }
+    if (mediaRecorder && mediaRecorder.state !== "inactive") {
+      mediaRecorder.stop();
     }
     setIsListening(false);
   };
 
+  const processAudioTask = async (audioBlob: Blob, mimeType: string) => {
+    setIsProcessingSpeech(true);
+    setSpeechError(null);
+    setSpeechSuccessMessage(null);
+
+    try {
+      const reader = new FileReader();
+      reader.readAsDataURL(audioBlob);
+      reader.onloadend = async () => {
+        const base64data = reader.result?.toString().split(",")[1];
+        if (!base64data) throw new Error("Failed to encode audio");
+
+        const response = await fetch("/api/gemini/voice-task-audio", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            audioData: base64data,
+            mimeType: mimeType || "audio/webm",
+            currentDate: new Date().toISOString(),
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error("Server extraction request failed.");
+        }
+
+        const extracted = await response.json();
+        if (extracted) {
+          if (extracted.transcript) setTranscript(extracted.transcript);
+          if (extracted.title) setTitle(extracted.title.toUpperCase());
+          if (extracted.details) setDetails(extracted.details);
+          if (extracted.priority) setPriority(extracted.priority);
+          if (extracted.deadline) setDeadline(extracted.deadline);
+          if (extracted.timeSlot) setTimeSlot(extracted.timeSlot);
+          if (extracted.project) {
+            setProject(extracted.project);
+            if (!availableTags.includes(extracted.project)) {
+              setAvailableTags((prev) => [...prev, extracted.project]);
+            }
+          }
+          setSpeechSuccessMessage("Magic AI Extraction Complete! Review your active form options below.");
+        }
+      };
+    } catch (err: any) {
+      console.error(err);
+      setSpeechError("AI couldn't process the audio correctly. " + (err.message || ""));
+    } finally {
+      setIsProcessingSpeech(false);
+    }
+  };
+
   const handleSpeechExtractTaskDetails = async () => {
+    // Keeping for backwards compatibility if user manually edits transcript and retries
     if (!transcript.trim()) {
       setSpeechError("Speak or type something in the draft before triggering AI extraction.");
       return;
-    }
-
-    // Stop listening if mic is actively recording
-    if (isListening) {
-      stopListening();
     }
 
     setIsProcessingSpeech(true);
@@ -213,18 +261,6 @@ export default function AddTask({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [title, details, priority, deadline, timeSlot, project]);
 
-  // Find an available hourly slot on this day with zero calendar events
-  const getFreeSlotOnDay = (dateStr: string, events: CalendarEvent[]): string | null => {
-    const testSlots = ["09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00"];
-    for (const slot of testSlots) {
-      const issues = checkDeadlineConflicts(dateStr, slot, events);
-      if (issues.length === 0) {
-        return slot;
-      }
-    }
-    return null;
-  };
-
   const handleSubmitForm = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     
@@ -235,6 +271,12 @@ export default function AddTask({
 
     setErrorMessage(null);
     localStorage.removeItem("nudge_add_task_draft");
+    
+    // Request notification permission if not asked yet
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+    
     onAddTask({
       title: title.trim().toUpperCase(),
       details: details.trim(),
@@ -306,6 +348,11 @@ export default function AddTask({
                 <span className="h-1.5 w-1.5 bg-red-650 rounded-full"></span>
                 <span>Active Recording</span>
               </span>
+            ) : isProcessingSpeech ? (
+              <span className="flex items-center gap-1.5 px-2 py-1 bg-blue-50 text-blue-600 rounded-full font-mono text-[9px] uppercase tracking-wider font-bold border border-blue-150">
+                <span className="animate-spin h-3 w-3 border-2 border-blue-200 border-t-blue-600 rounded-full"></span>
+                <span>AI Processing...</span>
+              </span>
             ) : (
               <span className="px-2 py-1 bg-slate-200/50 text-slate-500 rounded-lg font-mono text-[9px] uppercase tracking-wider font-bold">
                 Standby Mode
@@ -341,7 +388,7 @@ export default function AddTask({
                     onChange={(e) => setTranscript(e.target.value)}
                     placeholder={isListening ? "Listening... start speaking naturally..." : "Edit transcription text here if needed..."}
                     rows={2}
-                    className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-700 font-sans focus:outline-none focus:ring-1 focus:ring-black min-h-[44px]"
+                    className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-base sm:text-xs text-slate-700 font-sans focus:outline-none focus:ring-1 focus:ring-black min-h-[44px]"
                   />
                 </div>
               )}
@@ -377,7 +424,7 @@ export default function AddTask({
           )}
 
           {/* Action trigger button */}
-          {transcript && (
+          {transcript && !isListening && (
             <div className="flex justify-end pt-1 animate-fade-in">
               <button
                 type="button"
@@ -393,7 +440,7 @@ export default function AddTask({
                 ) : (
                   <>
                     <span className="material-symbols-outlined text-[14px]">auto_awesome</span>
-                    <span>Intelligently Extract with Gemini</span>
+                    <span>Extract Again with Gemini</span>
                   </>
                 )}
               </button>
@@ -483,16 +530,42 @@ export default function AddTask({
           <div className="bg-white p-5 border border-slate-200 rounded-xl shadow-sm flex flex-col justify-between min-h-[130px]">
             <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 font-bold flex items-center gap-1.5">
               <span className="material-symbols-outlined text-[16px] text-slate-400 font-bold">calendar_today</span> 
-              <span>Deadline Date</span>
+              <span>Deadline</span>
             </label>
-            <div className="mt-3">
-              <input
-                type="date"
-                required
-                value={deadline}
-                onChange={(e) => setDeadline(e.target.value)}
-                className="bg-white text-slate-700 border border-slate-200 p-2 font-mono text-xs rounded-lg w-full focus:outline-none focus:ring-2 focus:ring-black/5 focus:border-black uppercase cursor-pointer h-10"
-              />
+            <div className="mt-3 space-y-2 flex flex-col justify-between flex-1">
+              <div className="flex w-full gap-1 items-center bg-slate-50 border border-slate-200 rounded-lg p-1">
+                <input
+                  type="text"
+                  value={naturalDeadline}
+                  onChange={(e) => setNaturalDeadline(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleParseDeadline()}
+                  placeholder="e.g. next Friday at 3pm, or 'Write Q3 report'"
+                  className="bg-transparent text-slate-800 font-sans text-base sm:text-xs w-full px-2 focus:outline-none placeholder:text-slate-400"
+                />
+                <button
+                  type="button"
+                  onClick={handleParseDeadline}
+                  disabled={isParsingDeadline || !naturalDeadline.trim()}
+                  className="bg-black text-white p-1 rounded-md hover:bg-zinc-800 disabled:opacity-50 transition flex-shrink-0"
+                  title="Estimate with AI"
+                >
+                  {isParsingDeadline ? (
+                    <span className="animate-spin h-3.5 w-3.5 border-2 border-white/30 border-t-white rounded-full block m-0.5"></span>
+                  ) : (
+                    <span className="material-symbols-outlined text-[16px] block">auto_awesome</span>
+                  )}
+                </button>
+              </div>
+              <div className="flex gap-2 items-center">
+                <span className="font-mono text-[9px] text-slate-400 uppercase font-bold flex-shrink-0">Exact:</span>
+                <input
+                  type="date"
+                  required
+                  value={deadline}
+                  onChange={(e) => setDeadline(e.target.value)}
+                  className="bg-transparent text-slate-700 p-1 font-mono text-base sm:text-xs w-full focus:outline-none uppercase cursor-pointer h-7 text-right"
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -532,58 +605,11 @@ export default function AddTask({
                 type="time"
                 value={timeSlot}
                 onChange={(e) => setTimeSlot(e.target.value)}
-                className="bg-transparent text-slate-700 border-none p-0.5 font-mono text-xs uppercase focus:ring-0 focus:outline-none w-full cursor-pointer text-center"
+                className="bg-transparent text-slate-700 border-none p-0.5 font-mono text-base sm:text-xs uppercase focus:ring-0 focus:outline-none w-full cursor-pointer text-center"
               />
             </div>
           </div>
         </div>
-
-        {/* GOOGLE CALENDAR CONFLICT WATCHWARD */}
-        {gcalConnected && deadline && (() => {
-          const conflicts = checkDeadlineConflicts(deadline, timeSlot, gcalEvents);
-          if (conflicts.length === 0) {
-            return (
-              <div className="bg-emerald-50/40 border border-emerald-200/60 p-4 rounded-xl flex items-center gap-2.5 text-xs text-emerald-800">
-                <span className="material-symbols-outlined text-emerald-600 font-bold">check_circle</span>
-                <p className="font-semibold text-left">
-                  Google Calendar clear! No active events scheduled for this day/time.
-                </p>
-              </div>
-            );
-          }
-          
-          const freeSlot = getFreeSlotOnDay(deadline, gcalEvents);
-          
-          return (
-            <div className="bg-amber-50/70 border border-amber-200 p-4 rounded-xl space-y-3 font-sans">
-              <div className="flex items-start gap-2.5 text-xs text-amber-800 text-left">
-                <span className="material-symbols-outlined text-amber-700 font-bold mt-0.5">warning</span>
-                <div>
-                  <h4 className="font-bold uppercase tracking-wider text-[9px] font-mono mb-0.5">Calendar Collision!</h4>
-                  <p className="font-semibold">
-                    This deadline overlaps with <span className="font-bold underline">{conflicts.map(c => `'${c.event.summary || "Busy Slot"}'`).join(", ")}</span> on your Google Calendar.
-                  </p>
-                </div>
-              </div>
-              
-              {freeSlot && (
-                <div className="bg-white border border-amber-200/50 p-3 rounded-lg flex items-center justify-between gap-3 text-left">
-                  <div>
-                    <span className="font-mono text-[8px] text-amber-700 font-bold uppercase tracking-wider block">Suggested Fix</span>
-                    <p className="text-xs text-slate-700 font-mono font-bold uppercase">Alternate time <span className="text-black underline">{freeSlot}</span> is completely free!</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setTimeSlot(freeSlot)}
-                    className="font-mono text-[9px] uppercase font-bold tracking-wider px-3 py-1.5 bg-black text-white hover:bg-slate-800 rounded-md transition-all active:scale-95 cursor-pointer"
-                  >
-                    Use Suggestion
-                  </button>
-                </div>
-              )}
-            </div>
-          );
-        })()}
 
         {/* Project category selection rows */}
         <div className="space-y-1.5 bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
@@ -614,7 +640,7 @@ export default function AddTask({
                   maxLength={16}
                   value={customTagInput}
                   onChange={(e) => setCustomTagInput(e.target.value)}
-                  className="bg-transparent text-slate-700 text-xs font-mono uppercase px-1.5 py-0.5 outline-none border-none focus:ring-0 max-w-[80px]"
+                  className="bg-transparent text-slate-700 text-base sm:text-xs font-mono uppercase px-1.5 py-0.5 outline-none border-none focus:ring-0 max-w-[80px]"
                 />
                 <button
                   type="button"

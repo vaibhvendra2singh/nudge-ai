@@ -1,8 +1,11 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Inter", "Manrope", system-ui, sans-serif;
-  --font-body: "Manrope", "Inter", sans-serif;
+  --font-sans: "Times New Roman", Times, serif;
+  --font-body: "Times New Roman", Times, serif;
+  --font-headline: "Times New Roman", Times, serif;
+  --font-mono: "Times New Roman", Times, serif;
+  --font-serif: "Times New Roman", Times, serif;
 }
 
 @layer base {

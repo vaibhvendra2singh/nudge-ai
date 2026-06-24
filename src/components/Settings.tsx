@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Task } from "../types";
+import { signInUserAnonymously, getTasks, saveTask } from "../firebase";
 
 interface SettingsProps {
   userName: string;
@@ -7,6 +8,8 @@ interface SettingsProps {
   onClearAllTasks: () => void;
   totalTasksCount: number;
   onImportTasks?: (importedTasks: Task[]) => void;
+  cloudSyncEnabled?: boolean;
+  setCloudSyncEnabled?: (enabled: boolean) => void;
 }
 
 export default function Settings({
@@ -15,6 +18,8 @@ export default function Settings({
   onClearAllTasks,
   totalTasksCount,
   onImportTasks,
+  cloudSyncEnabled = false,
+  setCloudSyncEnabled,
 }: SettingsProps) {
   const [nameInput, setNameInput] = useState(userName);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -29,6 +34,45 @@ export default function Settings({
   const [importError, setImportError] = useState<string | null>(null);
   const [importSuccess, setImportSuccess] = useState<string | null>(null);
   const [importOverwrites, setImportOverwrites] = useState(false);
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<string | null>(null);
+
+  const handleBackupToCloud = async () => {
+    setCloudSyncStatus("Syncing...");
+    try {
+      const userId = await signInUserAnonymously();
+      const localTasks = JSON.parse(localStorage.getItem("nudge_tasks") || "[]") as Task[];
+      // We overwrite existing entries with identical IDs but won't delete tasks removed locally 
+      // (a full 2-way sync requires more logic, but this fulfills "background backup").
+      for (const t of localTasks) {
+        await saveTask(userId, t);
+      }
+      setCloudSyncStatus("Cloud Backup Complete ✓");
+      setTimeout(() => setCloudSyncStatus(null), 3000);
+    } catch (e) {
+      console.error(e);
+      setCloudSyncStatus("Cloud Backup Failed");
+      setTimeout(() => setCloudSyncStatus(null), 3000);
+    }
+  };
+
+  const handleRestoreFromCloud = async () => {
+    setCloudSyncStatus("Restoring...");
+    try {
+      const userId = await signInUserAnonymously();
+      const cloudTasks = await getTasks(userId);
+      if (onImportTasks && cloudTasks.length > 0) {
+        onImportTasks(cloudTasks); // Merges with local via existing logic
+        setImportSuccess(`Restored ${cloudTasks.length} tasks from Cloud Backup.`);
+      } else {
+        setImportSuccess("No tasks found in Cloud Backup.");
+      }
+      setCloudSyncStatus(null);
+    } catch (e) {
+      console.error(e);
+      setCloudSyncStatus("Restore Failed");
+      setTimeout(() => setCloudSyncStatus(null), 3000);
+    }
+  };
 
   // Voice Sandbox Playground
   const [isListening, setIsListening] = useState(false);
@@ -298,13 +342,13 @@ export default function Settings({
         </div>
         <form onSubmit={handleSaveName} className="space-y-3">
           <div className="flex gap-2 max-w-md">
-            <input
+              <input
               id="username-field"
               type="text"
               required
               value={nameInput}
               onChange={(e) => setNameInput(e.target.value)}
-              className="bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-700 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-black/5 focus:border-black w-full"
+              className="bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-700 text-base sm:text-sm font-mono focus:outline-none focus:ring-2 focus:ring-black/5 focus:border-black w-full"
               placeholder="e.g. Alex"
             />
             <button
@@ -421,13 +465,38 @@ export default function Settings({
               <span className="font-mono text-[9px] text-slate-400 uppercase font-bold tracking-wider">File Backup</span>
               <h4 className="font-bold text-xs uppercase text-slate-800 mt-0.5">Export Task Database</h4>
             </div>
-            <button
-              onClick={handleExportTasks}
-              className="w-full flex items-center justify-center gap-1.5 py-2 px-3 bg-slate-900 text-white hover:bg-slate-800 rounded-lg font-mono text-xs uppercase font-bold transition shadow-sm cursor-pointer"
-            >
-              <span className="material-symbols-outlined text-base">download</span>
-              Export Backup JSON
-            </button>
+            <div className="space-y-2">
+              <button
+                onClick={handleExportTasks}
+                className="w-full flex items-center justify-center gap-1.5 py-2 px-3 bg-slate-900 text-white hover:bg-slate-800 rounded-lg font-mono text-[10px] uppercase font-bold transition shadow-sm cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-sm">download</span>
+                Export Backup JSON
+              </button>
+              <button
+                onClick={handleBackupToCloud}
+                disabled={!!cloudSyncStatus && cloudSyncStatus !== "Cloud Backup Complete ✓"}
+                className="w-full flex items-center justify-center gap-1.5 py-2 px-3 bg-indigo-600 text-white hover:bg-indigo-700 rounded-lg font-mono text-[10px] uppercase font-bold transition shadow-sm cursor-pointer disabled:opacity-50"
+              >
+                <span className="material-symbols-outlined text-sm">cloud_sync</span>
+                {cloudSyncStatus || "Sync to Firebase Cloud"}
+              </button>
+              
+              {setCloudSyncEnabled && (
+                <div className="flex items-center gap-2 pt-2 border-t border-slate-200 mt-2">
+                  <input
+                    type="checkbox"
+                    id="auto-cloud-sync"
+                    checked={cloudSyncEnabled}
+                    onChange={(e) => setCloudSyncEnabled(e.target.checked)}
+                    className="rounded border-slate-350 bg-white cursor-pointer"
+                  />
+                  <label htmlFor="auto-cloud-sync" className="font-mono text-[9px] uppercase font-bold text-slate-600 cursor-pointer">
+                    Enable Automatic Background Sync (Firebase)
+                  </label>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Import Box */}
@@ -453,16 +522,25 @@ export default function Settings({
               </div>
 
               {/* Upload Input Button */}
-              <label className="w-full flex items-center justify-center gap-1.5 py-2 px-3 border border-dashed border-slate-300 hover:border-slate-400 hover:bg-slate-100 rounded-lg font-mono text-xs uppercase font-bold transition cursor-pointer text-slate-700">
-                <span className="material-symbols-outlined text-base">cloud_upload</span>
-                Upload JSON
-                <input
-                  type="file"
-                  accept=".json"
-                  onChange={handleImportFile}
-                  className="hidden"
-                />
-              </label>
+              <div className="flex gap-2">
+                <label className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 border border-dashed border-slate-300 hover:border-slate-400 hover:bg-slate-100 rounded-lg font-mono text-[10px] uppercase font-bold transition cursor-pointer text-slate-700 text-center">
+                  <span className="material-symbols-outlined text-sm">upload_file</span>
+                  Upload JSON
+                  <input
+                    type="file"
+                    accept=".json"
+                    onChange={handleImportFile}
+                    className="hidden"
+                  />
+                </label>
+                <button
+                  onClick={handleRestoreFromCloud}
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 bg-emerald-600 text-white hover:bg-emerald-700 rounded-lg font-mono text-[10px] uppercase font-bold transition shadow-sm cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-sm">cloud_download</span>
+                  Cloud Restore
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -525,6 +603,16 @@ export default function Settings({
             )}
           </div>
         </div>
+      </section>
+
+      {/* Legal & Privacy Links */}
+      <section className="pt-8 pb-4 text-center space-y-2 border-t border-slate-200 mt-8">
+        <div className="flex items-center justify-center gap-4 text-xs font-mono uppercase tracking-wider font-bold">
+          <a href="/privacy-policy.html" target="_blank" className="text-slate-500 hover:text-black transition-colors underline underline-offset-4">Privacy Policy</a>
+          <span className="text-slate-300">|</span>
+          <a href="/terms-of-service.html" target="_blank" className="text-slate-500 hover:text-black transition-colors underline underline-offset-4">Terms of Service</a>
+        </div>
+        <p className="text-[10px] font-mono text-slate-400 uppercase mt-2">© {new Date().getFullYear()} Nudge</p>
       </section>
     </div>
   );

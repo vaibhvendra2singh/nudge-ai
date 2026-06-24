@@ -59,14 +59,19 @@ export function getTaskUrgencyDetails(task: Task, referenceDateStr?: string | nu
   if (isOverdue) {
     timeLabel = "Overdue";
     category = "urgent";
+  } else if (diffHours <= 2) {
+    category = "urgent";
+    const minutes = Math.max(1, Math.floor(diffMs / (1000 * 60)));
+    timeLabel = `${minutes} min${minutes > 1 ? "s" : ""} left`;
   } else if (diffHours <= 24) {
     category = "urgent";
     const hours = Math.max(1, Math.floor(diffHours));
     timeLabel = `${hours} hour${hours > 1 ? "s" : ""} left`;
   } else if (diffHours <= 72) {
     category = "soon";
-    const days = Math.ceil(diffHours / 24);
-    timeLabel = `${days} day${days > 1 ? "s" : ""} left`;
+    const days = Math.floor(diffHours / 24);
+    const hrs = Math.floor(diffHours % 24);
+    timeLabel = `${days}d ${hrs}h left`;
   } else {
     category = "future";
     const days = Math.ceil(diffHours / 24);

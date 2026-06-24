@@ -21,13 +21,15 @@ import {
 } from "firebase/firestore";
 import { Task } from "./types";
 
+import config from "../firebase-applet-config.json";
+
 const firebaseConfig = {
-  apiKey: "AIzaSyCi7yAztUtgItC_W9HhVYTr7iRCMrkgP-0",
-  authDomain: "abiding-dynamo-rln7n.firebaseapp.com",
-  projectId: "abiding-dynamo-rln7n",
-  storageBucket: "abiding-dynamo-rln7n.firebasestorage.app",
-  messagingSenderId: "960957466764",
-  appId: "1:960957466764:web:b5b4b08bd132b1c80b53a9"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || config.apiKey,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || config.authDomain,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || config.projectId,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || config.storageBucket,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || config.messagingSenderId,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || config.appId
 };
 
 const app = initializeApp(firebaseConfig);
@@ -132,6 +134,7 @@ export async function getTasks(userId: string): Promise<Task[]> {
         priority: data.priority || "medium",
         deadline: data.deadline || "",
         completed: !!data.completed,
+        archived: !!data.archived,
         project: data.project || "Work",
         timeSlot: data.timeSlot || "",
         subtasks: Array.isArray(data.subtasks) ? data.subtasks : [],

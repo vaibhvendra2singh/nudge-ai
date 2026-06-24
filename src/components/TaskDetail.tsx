@@ -1,30 +1,35 @@
 import React, { useState, useEffect } from "react";
 import { Task, SubTask } from "../types";
 import { getTaskUrgencyDetails, downloadICSFile } from "../utils";
-import { CalendarEvent, checkDeadlineConflicts } from "../calendarService";
 
 interface TaskDetailProps {
   task: Task;
+  allTasks?: Task[];
   onGoBack: () => void;
   onUpdateTask: (updatedTask: Task) => void;
   onDeleteTask: (id: string) => void;
-  gcalEvents?: CalendarEvent[];
-  gcalConnected?: boolean;
 }
 
 export default function TaskDetail({
   task,
+  allTasks = [],
   onGoBack,
   onUpdateTask,
   onDeleteTask,
-  gcalEvents = [],
-  gcalConnected = false,
 }: TaskDetailProps) {
   const [isNudgeLoading, setIsNudgeLoading] = useState(false);
   const [isBreakdownLoading, setIsBreakdownLoading] = useState(false);
   const [nudgeErrorMsg, setNudgeErrorMsg] = useState<string | null>(null);
   const [breakdownErrorMsg, setBreakdownErrorMsg] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  
+  const [isEditing, setIsEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState(task.title);
+  const [editProject, setEditProject] = useState(task.project);
+  const [editDetails, setEditDetails] = useState(task.details);
+  const [editDeadline, setEditDeadline] = useState(task.deadline);
+  const [editTimeSlot, setEditTimeSlot] = useState(task.timeSlot || "");
+  const [editPriority, setEditPriority] = useState(task.priority);
 
   // Determine urgency parameters
   const urgency = getTaskUrgencyDetails(task);
@@ -60,6 +65,8 @@ export default function TaskDetail({
     setIsNudgeLoading(true);
     setNudgeErrorMsg(null);
     try {
+      const urgentTasksCount = allTasks.filter(t => getTaskUrgencyDetails(t).category === "urgent" && !t.completed).length;
+
       const response = await fetch("/api/nudge", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -70,6 +77,8 @@ export default function TaskDetail({
           deadline: task.deadline,
           hoursLeft: urgency.hoursLeft,
           subtasks: task.subtasks,
+          currentTime: new Date().toISOString(),
+          otherUrgentTasksCount: Math.max(0, urgentTasksCount - 1)
         }),
       });
 
@@ -160,7 +169,11 @@ export default function TaskDetail({
     onUpdateTask({
       ...task,
       completed: !task.completed,
+      completedAt: !task.completed ? new Date().toISOString().split('T')[0] : undefined,
     });
+    if (!task.completed) {
+      onGoBack();
+    }
   };
 
   // Format priority helper labels
@@ -177,6 +190,19 @@ export default function TaskDetail({
   // Check if everything is checked off
   const allCompleted = (task.subtasks || []).length > 0 && (task.subtasks || []).every(s => s.completed);
 
+  const handleSaveEdit = () => {
+    onUpdateTask({
+      ...task,
+      title: editTitle || "Untitled Task",
+      project: editProject || "Task",
+      details: editDetails,
+      deadline: editDeadline,
+      timeSlot: editTimeSlot,
+      priority: editPriority as any,
+    });
+    setIsEditing(false);
+  };
+
   return (
     <div className="w-full space-y-6 animate-fade-in text-left">
       {/* Back button row */}
@@ -190,12 +216,13 @@ export default function TaskDetail({
         </button>
         {showDeleteConfirm ? (
           <div className="flex items-center gap-1.5 bg-zinc-100 border border-zinc-200 p-1 rounded-lg">
-            <span className="font-mono text-[9px] uppercase font-bold text-zinc-800 px-1">Confirm delete?</span>
+            <span className="font-mono text-[9px] uppercase font-bold text-zinc-800 px-1">Confirm archive?</span>
             <button
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                onDeleteTask(task.id);
+                onUpdateTask({ ...task, archived: true });
+                onGoBack();
               }}
               className="px-2 py-1 bg-black text-white rounded font-mono text-[10px] font-bold uppercase cursor-pointer hover:bg-zinc-800 transition"
             >
@@ -213,41 +240,126 @@ export default function TaskDetail({
             </button>
           </div>
         ) : (
-          <button
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              setShowDeleteConfirm(true);
-            }}
-            className="px-3 py-1.5 bg-white border border-zinc-200 text-zinc-850 hover:bg-zinc-50 rounded-lg transition-colors font-mono text-xs uppercase cursor-pointer font-bold"
-          >
-            Delete Task
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setIsEditing(!isEditing)}
+              className="px-3 py-1.5 bg-white border border-zinc-200 text-zinc-850 hover:bg-zinc-50 rounded-lg transition-colors font-mono text-xs uppercase cursor-pointer font-bold"
+            >
+              {isEditing ? "Cancel Edit" : "Edit Task"}
+            </button>
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setShowDeleteConfirm(true);
+              }}
+              className="px-3 py-1.5 bg-slate-50 border border-slate-200 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors font-mono text-xs uppercase cursor-pointer font-bold flex items-center gap-1"
+            >
+              <span className="material-symbols-outlined text-[14px]">archive</span>
+              Archive
+            </button>
+          </div>
         )}
       </div>
 
       {/* Task Header area */}
-      <section className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm space-y-2">
-        <div className="space-y-1">
-          <h2 className="font-headline text-xl sm:text-2xl font-black text-slate-800 tracking-tight uppercase leading-snug break-words">
-            {task.title}
-          </h2>
-          <div className="flex items-center gap-3 font-mono text-xs text-slate-500 uppercase font-semibold">
-            <span>Project: {task.project || "General"}</span>
-            {task.completed && (
-              <>
-                <span>•</span>
-                <span className="text-zinc-600 font-bold">Resolved</span>
-              </>
-            )}
+      {isEditing ? (
+        <section className="bg-white border border-slate-300 rounded-xl p-6 shadow-md space-y-4">
+          <div className="space-y-3">
+            <div>
+              <label className="block font-mono text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-wider">Task Title</label>
+              <input 
+                type="text" 
+                value={editTitle}
+                onChange={e => setEditTitle(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-base sm:text-sm font-bold text-slate-800"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block font-mono text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-wider">Project</label>
+                <input 
+                  type="text" 
+                  value={editProject}
+                  onChange={e => setEditProject(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-base sm:text-xs text-slate-800 font-mono"
+                />
+              </div>
+              <div>
+                <label className="block font-mono text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-wider">Priority</label>
+                <select 
+                  value={editPriority}
+                  onChange={e => setEditPriority(e.target.value as any)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-base sm:text-xs text-slate-800 font-mono"
+                >
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                </select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block font-mono text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-wider">Deadline</label>
+                <input 
+                  type="date" 
+                  value={editDeadline}
+                  onChange={e => setEditDeadline(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-base sm:text-xs text-slate-800 font-mono"
+                />
+              </div>
+              <div>
+                <label className="block font-mono text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-wider">Time</label>
+                <input 
+                  type="time" 
+                  value={editTimeSlot}
+                  onChange={e => setEditTimeSlot(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-base sm:text-xs text-slate-800 font-mono"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="block font-mono text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-wider">Details</label>
+              <textarea 
+                value={editDetails}
+                onChange={e => setEditDetails(e.target.value)}
+                rows={3}
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-base sm:text-xs text-slate-800"
+              />
+            </div>
           </div>
-        </div>
-        {task.details && (
-          <p className="font-body text-slate-600 text-sm sm:text-base leading-relaxed whitespace-pre-line border-l-4 border-slate-300 pl-4 py-1">
-            {task.details}
-          </p>
-        )}
-      </section>
+          <div className="flex justify-end pt-2">
+            <button
+              onClick={handleSaveEdit}
+              className="px-4 py-2 bg-black text-white rounded-lg font-mono text-[10px] uppercase font-bold shadow hover:bg-zinc-800 cursor-pointer"
+            >
+              Save Changes
+            </button>
+          </div>
+        </section>
+      ) : (
+        <section className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm space-y-2">
+          <div className="space-y-1">
+            <h2 className="font-headline text-xl sm:text-2xl font-black text-slate-800 tracking-tight uppercase leading-snug break-words">
+              {task.title}
+            </h2>
+            <div className="flex items-center gap-3 font-mono text-xs text-slate-500 uppercase font-semibold">
+              <span>Project: {task.project || "General"}</span>
+              {task.completed && (
+                <>
+                  <span>•</span>
+                  <span className="text-zinc-600 font-bold">Resolved</span>
+                </>
+              )}
+            </div>
+          </div>
+          {task.details && (
+            <p className="font-body text-slate-600 text-sm sm:text-base leading-relaxed whitespace-pre-line border-l-4 border-slate-300 pl-4 py-1">
+              {task.details}
+            </p>
+          )}
+        </section>
+      )}
 
       {/* AUTOMATIC URGENT NUDGE SECTION */}
       {isNudgeEligible && (
@@ -395,33 +507,6 @@ export default function TaskDetail({
           </div>
         )}
       </section>
-
-      {/* GOOGLE CALENDAR ADVISORY CONFLICT ALERT */}
-      {gcalConnected && task.deadline && (() => {
-        const conflicts = checkDeadlineConflicts(task.deadline, task.timeSlot || "17:00", gcalEvents);
-        if (conflicts.length > 0) {
-          return (
-            <div className="mb-6 bg-amber-50/70 border border-amber-200 text-amber-800 p-4 rounded-xl flex items-start gap-3 text-left font-sans animate-fade-in shadow-xs">
-              <span className="material-symbols-outlined text-amber-700 font-bold animate-pulse mt-0.5">warning</span>
-              <div>
-                <h4 className="font-bold uppercase tracking-wider text-[9px] font-mono mb-0.5">Calendar Conflict Identified</h4>
-                <p className="text-xs font-semibold leading-relaxed">
-                  This task's target deadline overlaps with <span className="font-bold underline">{conflicts.map(c => `'${c.event.summary || "Busy Slot"}'`).join(", ")}</span> on your Google Calendar.
-                </p>
-              </div>
-            </div>
-          );
-        } else {
-          return (
-            <div className="mb-6 bg-emerald-50/30 border border-emerald-150 text-emerald-800 p-3 rounded-xl flex items-center gap-2.5 text-left text-xs font-sans animate-fade-in">
-              <span className="material-symbols-outlined text-emerald-600 font-bold">check_circle</span>
-              <p className="font-semibold">
-                No scheduling conflicts!
-              </p>
-            </div>
-          );
-        }
-      })()}
 
       {/* METADATA BLOCKS */}
       <section className="grid grid-cols-1 sm:grid-cols-2 gap-4">
