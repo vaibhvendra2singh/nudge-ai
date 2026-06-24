@@ -117,7 +117,7 @@ export async function signInUserAnonymously(): Promise<string> {
   const { data, error } = await supabase.auth.signInAnonymously();
   if (!error && data.user) return data.user.id;
   
-  console.warn("Anonymous auth disabled or failed. Falling back to local ID.", error);
+  console.log("Supabase anonymous auth is disabled or not configured. Falling back to local/localStorage ID.");
   let localId = localStorage.getItem("nudge_user_id");
   if (!localId) {
     localId = `user-fallback-${Math.random().toString(36).substring(2, 11)}`;

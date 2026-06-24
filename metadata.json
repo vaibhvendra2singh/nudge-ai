@@ -1,6 +1,6 @@
 {
   "name": "Nudge",
   "description": "A high-performance minimalist task manager with intelligent urgency calculation, automated subtask breakdown, and smart alert nudges powered by Gemini.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": ["microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

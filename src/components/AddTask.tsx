@@ -24,13 +24,82 @@ export default function AddTask({
   // AI Voice task draft state
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState("");
-  const [speechError, setSpeechError] = useState<string | null>(null);
+  const [speechError, setSpeechError] = useState<React.ReactNode | null>(null);
   const [isProcessingSpeech, setIsProcessingSpeech] = useState(false);
   const [speechSuccessMessage, setSpeechSuccessMessage] = useState<string | null>(null);
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
   const [naturalDeadline, setNaturalDeadline] = useState("");
   const [isParsingDeadline, setIsParsingDeadline] = useState(false);
   const audioChunksRef = React.useRef<Blob[]>([]);
+  const [recognitionObj, setRecognitionObj] = useState<any>(null);
+  const [activeEngine, setActiveEngine] = useState<"speech" | "recorder" | null>(null);
+  const transcriptRef = React.useRef(transcript);
+
+  useEffect(() => {
+    transcriptRef.current = transcript;
+  }, [transcript]);
+
+  // Initialize SpeechRecognition once on mount just like Settings.tsx for robust mobile support
+  useEffect(() => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    let rec: any = null;
+    if (SpeechRecognition) {
+      try {
+        rec = new SpeechRecognition();
+        rec.continuous = true;
+        rec.interimResults = true;
+        rec.lang = "en-US";
+
+        rec.onresult = (event: any) => {
+          let finalTranscript = "";
+          for (let i = event.resultIndex; i < event.results.length; ++i) {
+            if (event.results[i].isFinal) {
+              finalTranscript += event.results[i][0].transcript;
+            }
+          }
+          if (finalTranscript) {
+            setTranscript((prev) => {
+              const separator = prev && !prev.endsWith(" ") ? " " : "";
+              return prev + separator + finalTranscript;
+            });
+          }
+        };
+
+        rec.onerror = (event: any) => {
+          console.error("Speech recognition error:", event.error);
+          if (event.error === "not-allowed") {
+            setSpeechError(
+              <span className="leading-relaxed block">
+                <strong className="font-bold text-amber-950 block mb-1">Microphone Access Denied</strong>
+                Microphone permission was blocked. Please click the site settings/lock icon in your browser's address bar and grant microphone access.
+              </span>
+            );
+          } else {
+            setSpeechError(`Speech recognition error: ${event.error}`);
+          }
+          setIsListening(false);
+        };
+
+        rec.onend = () => {
+          setIsListening(false);
+        };
+
+        setRecognitionObj(rec);
+      } catch (err) {
+        console.error("SpeechRecognition initialization failed:", err);
+      }
+    }
+
+    return () => {
+      if (rec) {
+        try {
+          rec.stop();
+        } catch (e) {
+          console.error(e);
+        }
+      }
+    };
+  }, []);
 
   const handleParseDeadline = async () => {
     if (!naturalDeadline.trim()) return;
@@ -67,6 +136,21 @@ export default function AddTask({
     setTranscript("");
     audioChunksRef.current = [];
 
+    if (recognitionObj) {
+      try {
+        recognitionObj.start();
+        setIsListening(true);
+        setActiveEngine("speech");
+      } catch (err: any) {
+        console.error("Speech recognition start failed, falling back to MediaRecorder", err);
+        startMediaRecorderFallback();
+      }
+    } else {
+      startMediaRecorderFallback();
+    }
+  };
+
+  const startMediaRecorderFallback = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream);
@@ -87,22 +171,80 @@ export default function AddTask({
       recorder.start();
       setMediaRecorder(recorder);
       setIsListening(true);
+      setActiveEngine("recorder");
     } catch (err: any) {
       console.error(err);
-      if (err.name === "NotAllowedError" || err.name === "SecurityError") {
-        setSpeechError("Microphone access is not allowed. Please allow microphone permissions in your browser.");
+      const isIframe = typeof window !== "undefined" && window.self !== window.top;
+      const errorMessage = err.message || "";
+      if (
+        err.name === "SecurityError" || 
+        errorMessage.includes("Feature-Policy") || 
+        errorMessage.includes("not allowed in this document") ||
+        isIframe
+      ) {
+        setSpeechError(
+          <span className="leading-relaxed block">
+            <strong className="font-bold text-amber-950 block mb-1">Microphone Blocked by Iframe Sandbox Policy</strong>
+            The embedded Google AI Studio preview frame restricts microphone access. To use Voice Capture, please open the app in a standalone browser tab using your public link:{" "}
+            <a 
+              href="https://nudge-960957466764.asia-southeast1.run.app" 
+              target="_blank" 
+              rel="noopener noreferrer" 
+              className="underline font-bold text-black hover:text-slate-800 inline-flex items-center gap-0.5 bg-amber-100/60 px-1 py-0.5 rounded"
+            >
+              Open Standalone App <span className="material-symbols-outlined text-[11px]">open_in_new</span>
+            </a>
+          </span>
+        );
+      } else if (err.name === "NotAllowedError") {
+        setSpeechError(
+          <span className="leading-relaxed block">
+            <strong className="font-bold text-amber-950 block mb-1">Microphone Access Denied</strong>
+            Microphone permission was blocked. Please click the site settings/lock icon in your browser's address bar and grant microphone access to start recording tasks.
+          </span>
+        );
       } else {
-        setSpeechError("Failed to initiate microphone stream recording. " + err.message);
+        setSpeechError("Failed to initiate microphone recording: " + errorMessage);
       }
       setIsListening(false);
+      setActiveEngine(null);
     }
   };
 
   const stopListening = () => {
+    if (activeEngine === "speech" && recognitionObj) {
+      try {
+        recognitionObj.stop();
+      } catch (e) {
+        console.error(e);
+      }
+      setIsListening(false);
+      setActiveEngine(null);
+      // Wait a tiny bit and extract the task details using Gemini!
+      setTimeout(() => {
+        handleSpeechExtractTaskDetails();
+      }, 300);
+      return;
+    }
+
+    if (activeEngine === "recorder" && mediaRecorder) {
+      if (mediaRecorder.state !== "inactive") {
+        mediaRecorder.stop();
+      }
+      setIsListening(false);
+      setActiveEngine(null);
+      return;
+    }
+
+    // Emergency cleanup fallback
+    if (recognitionObj) {
+      try { recognitionObj.stop(); } catch (e) {}
+    }
     if (mediaRecorder && mediaRecorder.state !== "inactive") {
-      mediaRecorder.stop();
+      try { mediaRecorder.stop(); } catch (e) {}
     }
     setIsListening(false);
+    setActiveEngine(null);
   };
 
   const processAudioTask = async (audioBlob: Blob, mimeType: string) => {
@@ -158,7 +300,8 @@ export default function AddTask({
 
   const handleSpeechExtractTaskDetails = async () => {
     // Keeping for backwards compatibility if user manually edits transcript and retries
-    if (!transcript.trim()) {
+    const currentText = transcriptRef.current;
+    if (!currentText.trim()) {
       setSpeechError("Speak or type something in the draft before triggering AI extraction.");
       return;
     }
@@ -172,7 +315,7 @@ export default function AddTask({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          speechText: transcript,
+          speechText: currentText,
           currentDate: new Date().toISOString(),
         }),
       });
@@ -397,17 +540,17 @@ export default function AddTask({
 
           {/* Feedback logs */}
           {speechError && (
-            <div className="text-[10px] font-mono text-zinc-650 bg-zinc-50 p-2.5 rounded-lg border border-zinc-200 flex flex-wrap items-center justify-between gap-2.5">
-              <div className="flex items-center gap-1.5 min-w-0">
-                <span className="material-symbols-outlined text-[13px] text-zinc-650 font-bold flex-shrink-0">warning</span>
-                <span className="truncate">{speechError}</span>
+            <div className="text-xs font-sans text-amber-900 bg-amber-50 p-3 rounded-xl border border-amber-200 flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+              <div className="flex items-start gap-2">
+                <span className="material-symbols-outlined text-[18px] text-amber-700 font-bold flex-shrink-0 mt-0.5">warning</span>
+                <div className="text-left leading-relaxed">{speechError}</div>
               </div>
               {transcript && (
                 <button
                   type="button"
                   onClick={handleSpeechExtractTaskDetails}
                   disabled={isProcessingSpeech}
-                  className="px-2 py-1 bg-black text-white hover:bg-zinc-800 rounded font-mono text-[9px] uppercase tracking-wider font-bold cursor-pointer transition-all flex items-center gap-0.5 active:scale-95 disabled:opacity-50"
+                  className="px-2.5 py-1.5 bg-black text-white hover:bg-zinc-800 rounded-lg font-mono text-[9px] uppercase tracking-wider font-bold cursor-pointer transition-all flex items-center gap-1 active:scale-95 disabled:opacity-50 self-end sm:self-start flex-shrink-0"
                 >
                   <span className="material-symbols-outlined text-[12px]">refresh</span>
                   <span>Retry Extraction</span>

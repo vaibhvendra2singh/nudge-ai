@@ -9,6 +9,8 @@ interface DashboardProps {
   onSelectTask: (id: string) => void;
   onNavigateToTab: (tab: "dashboard" | "add_task" | "settings") => void;
   userName: string;
+  onUpdateTask?: (task: Task) => void;
+  onDeleteTask?: (id: string) => void;
 }
 
 export default function Dashboard({
@@ -17,6 +19,8 @@ export default function Dashboard({
   onSelectTask,
   onNavigateToTab,
   userName = "Alex",
+  onUpdateTask,
+  onDeleteTask,
 }: DashboardProps) {
   // Map titles to icons
   const getTaskIconName = (title: string, project: string): string => {
@@ -140,6 +144,9 @@ export default function Dashboard({
   const soonTasks = categorizedTasks.filter(item => !item.task.completed && !item.task.archived && item.category === "soon" && item.task.title.toLowerCase().includes(searchQuery.toLowerCase()));
   const futureTasks = categorizedTasks.filter(item => !item.task.completed && !item.task.archived && item.category === "future" && item.task.title.toLowerCase().includes(searchQuery.toLowerCase()));
   const completedTasks = categorizedTasks.filter(item => item.task.completed && !item.task.archived && item.task.title.toLowerCase().includes(searchQuery.toLowerCase()));
+  const archivedTasks = categorizedTasks.filter(item => item.task.archived && item.task.title.toLowerCase().includes(searchQuery.toLowerCase()));
+
+  const [showArchived, setShowArchived] = React.useState(false);
 
   return (
     <div className="w-full">
@@ -516,6 +523,95 @@ export default function Dashboard({
                 </div>
               </div>
             ))}
+          </div>
+        )}
+      </section>
+
+      {/* ARCHIVED TASKS SECTION */}
+      <section className="mb-24 opacity-75" id="section-archived">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="font-headline text-xs font-bold text-[#695555] uppercase tracking-widest flex items-center gap-1.5">
+            <span className="material-symbols-outlined text-[16px]">archive</span>
+            <span>Archived Backlog ({archivedTasks.length})</span>
+          </h2>
+          {archivedTasks.length > 0 && (
+            <button
+              onClick={() => setShowArchived(!showArchived)}
+              className="text-slate-500 hover:text-black font-mono text-[10px] uppercase font-bold tracking-wider cursor-pointer bg-slate-100 hover:bg-slate-200 px-2.5 py-1 rounded-lg transition-all shadow-xs"
+            >
+              {showArchived ? "Hide Archived" : "Show Archived"}
+            </button>
+          )}
+        </div>
+
+        {archivedTasks.length === 0 ? (
+          <div className="bg-slate-50/30 border border-slate-200 border-dashed rounded-xl p-6 text-center space-y-1 animate-fade-in">
+            <h3 className="font-headline text-[11px] font-bold text-slate-605 uppercase tracking-wider">No Archived Items</h3>
+            <p className="text-[10px] font-mono text-slate-400 uppercase">You can archive tasks from their detail pages.</p>
+          </div>
+        ) : showArchived ? (
+          <div className="space-y-2 animate-fade-in">
+            {archivedTasks.map(({ task }) => (
+              <div
+                key={task.id}
+                className="task-card bg-zinc-50 border border-zinc-200 rounded-xl p-3 flex items-center justify-between gap-4"
+              >
+                <div className="flex items-center gap-3 flex-1 overflow-hidden">
+                  <span className="material-symbols-outlined text-zinc-400 text-lg">archive</span>
+                  <div className="truncate text-left">
+                    <h3 className="font-headline text-sm font-semibold text-zinc-650 uppercase tracking-tight truncate">
+                      {task.title}
+                    </h3>
+                    <div className="flex items-center gap-2 text-[9px] text-slate-400 uppercase font-mono">
+                      <span>{task.project}</span>
+                      <span>•</span>
+                      <span>Archived</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {/* Restore button */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (onUpdateTask) {
+                        onUpdateTask({ ...task, archived: false });
+                      }
+                    }}
+                    title="Restore Task"
+                    className="p-1.5 hover:bg-slate-200 rounded-lg text-slate-600 transition-colors cursor-pointer flex items-center"
+                  >
+                    <span className="material-symbols-outlined text-sm">unarchive</span>
+                  </button>
+
+                  {/* Delete permanently button */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (window.confirm("Are you sure you want to permanently delete this task? This action cannot be undone.")) {
+                        if (onDeleteTask) {
+                          onDeleteTask(task.id);
+                        }
+                      }
+                    }}
+                    title="Delete Permanently"
+                    className="p-1.5 hover:bg-red-50 hover:text-red-600 rounded-lg text-slate-400 transition-colors cursor-pointer flex items-center"
+                  >
+                    <span className="material-symbols-outlined text-sm">delete_forever</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="bg-slate-50/20 border border-slate-200/50 rounded-xl py-3 px-4 text-center">
+            <button 
+              onClick={() => setShowArchived(true)}
+              className="font-mono text-[10px] font-bold uppercase tracking-wider text-slate-500 hover:text-black cursor-pointer transition-all"
+            >
+              Click to view {archivedTasks.length} archived items
+            </button>
           </div>
         )}
       </section>

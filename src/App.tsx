@@ -442,6 +442,8 @@ export default function App() {
               onSelectTask={handleSelectTask}
               onNavigateToTab={handleNavigateToTab}
               userName={userName}
+              onUpdateTask={handleUpdateTask}
+              onDeleteTask={handleDeleteTask}
             />
           ) : activeTab === "calendar" ? (
             <Calendar
