@@ -1,15 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { Task } from "../types";
-import { signInUserAnonymously, getTasks, saveTask } from "../firebase";
+import { signInUserAnonymously, getTasks, saveTask, googleSignIn, logoutGoogle, auth, getSafeRedirectUrl } from "../supabase";
 
 interface SettingsProps {
   userName: string;
   onUpdateUserName: (name: string) => void;
   onClearAllTasks: () => void;
   totalTasksCount: number;
-  onImportTasks?: (importedTasks: Task[]) => void;
-  cloudSyncEnabled?: boolean;
-  setCloudSyncEnabled?: (enabled: boolean) => void;
 }
 
 export default function Settings({
@@ -17,62 +14,58 @@ export default function Settings({
   onUpdateUserName,
   onClearAllTasks,
   totalTasksCount,
-  onImportTasks,
-  cloudSyncEnabled = false,
-  setCloudSyncEnabled,
 }: SettingsProps) {
   const [nameInput, setNameInput] = useState(userName);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [showWipeConfirm, setShowWipeConfirm] = useState(false);
+  const [isGoogleSignedIn, setIsGoogleSignedIn] = useState(false);
+  const [googleError, setGoogleError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const unsubscribe = auth.onAuthStateChanged((user: any) => {
+      if (!user) {
+        setIsGoogleSignedIn(false);
+        return;
+      }
+      // Robust detection for Google / non-anonymous social logins
+      const isAnon = user.is_anonymous === true;
+      const isGoogleProvider = user.app_metadata?.provider === "google" || 
+                               (user.identities && user.identities.some((id: any) => id.provider === "google"));
+      const hasEmail = !!user.email && !user.email.endsWith("@anonymous.supabase.co");
+      
+      setIsGoogleSignedIn(!isAnon && (isGoogleProvider || hasEmail));
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const handleGoogleSignIn = async () => {
+    setGoogleError(null);
+    try {
+      await googleSignIn();
+    } catch (e: any) {
+      console.error("Google sign in failed", e);
+      const msg = e?.message || String(e);
+      if (msg.includes("provider is not enabled") || msg.includes("Unsupported provider")) {
+        setGoogleError("Google Sign-In is not enabled yet in your Supabase Auth Providers dashboard. In your Supabase project console (Authentication -> Providers -> Google), ensure 'Enable Sign in with Google' is turned ON and you have clicked the 'Save' button at the bottom of the card.");
+      } else {
+        setGoogleError(`Google auth error: ${msg}. If you're using the embedded AI Studio preview panel, please try clicking 'Open in new tab' to authenticate.`);
+      }
+    }
+  };
+
+  const handleGoogleSignOut = async () => {
+    try {
+      await logoutGoogle();
+      window.location.reload();
+    } catch (e) {
+      console.error("Google sign out failed", e);
+    }
+  };
 
   // Diagnostics & endpoint check
   const [healthStatus, setHealthStatus] = useState<"idle" | "testing" | "ok" | "error">("idle");
   const [healthMessage, setHealthMessage] = useState("");
   const [latency, setLatency] = useState<number | null>(null);
-
-  // Backup & Restore
-  const [importError, setImportError] = useState<string | null>(null);
-  const [importSuccess, setImportSuccess] = useState<string | null>(null);
-  const [importOverwrites, setImportOverwrites] = useState(false);
-  const [cloudSyncStatus, setCloudSyncStatus] = useState<string | null>(null);
-
-  const handleBackupToCloud = async () => {
-    setCloudSyncStatus("Syncing...");
-    try {
-      const userId = await signInUserAnonymously();
-      const localTasks = JSON.parse(localStorage.getItem("nudge_tasks") || "[]") as Task[];
-      // We overwrite existing entries with identical IDs but won't delete tasks removed locally 
-      // (a full 2-way sync requires more logic, but this fulfills "background backup").
-      for (const t of localTasks) {
-        await saveTask(userId, t);
-      }
-      setCloudSyncStatus("Cloud Backup Complete ✓");
-      setTimeout(() => setCloudSyncStatus(null), 3000);
-    } catch (e) {
-      console.error(e);
-      setCloudSyncStatus("Cloud Backup Failed");
-      setTimeout(() => setCloudSyncStatus(null), 3000);
-    }
-  };
-
-  const handleRestoreFromCloud = async () => {
-    setCloudSyncStatus("Restoring...");
-    try {
-      const userId = await signInUserAnonymously();
-      const cloudTasks = await getTasks(userId);
-      if (onImportTasks && cloudTasks.length > 0) {
-        onImportTasks(cloudTasks); // Merges with local via existing logic
-        setImportSuccess(`Restored ${cloudTasks.length} tasks from Cloud Backup.`);
-      } else {
-        setImportSuccess("No tasks found in Cloud Backup.");
-      }
-      setCloudSyncStatus(null);
-    } catch (e) {
-      console.error(e);
-      setCloudSyncStatus("Restore Failed");
-      setTimeout(() => setCloudSyncStatus(null), 3000);
-    }
-  };
 
   // Voice Sandbox Playground
   const [isListening, setIsListening] = useState(false);
@@ -155,105 +148,6 @@ export default function Settings({
       setLatency(null);
       setHealthMessage(err.message || "Endpoint host responded with severe fault. Check environment variables.");
     }
-  };
-
-  // Export tasks as JSON
-  const handleExportTasks = () => {
-    const savedTasks = localStorage.getItem("nudge_tasks") || "[]";
-    const blob = new Blob([savedTasks], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `nudge_tasks_backup_${new Date().toISOString().split("T")[0]}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
-  // Import tasks with strict validation
-  const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setImportError(null);
-    setImportSuccess(null);
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      try {
-        const text = event.target?.result as string;
-        const parsed = JSON.parse(text);
-
-        if (!Array.isArray(parsed)) {
-          throw new Error("File structure invalid: backup must be a list of task records.");
-        }
-
-        // Simple validation checks on items
-        const validatedTasks: Task[] = parsed.map((item: any, idx) => {
-          if (!item.title) {
-            throw new Error(`Item at position #${idx + 1} has no title defined.`);
-          }
-          return {
-            id: item.id || `task-${Math.random().toString(36).substring(2, 11)}`,
-            title: item.title,
-            details: item.details || "",
-            priority: ["low", "medium", "high"].includes(item.priority) ? item.priority : "medium",
-            deadline: item.deadline || new Date().toISOString().split("T")[0],
-            completed: !!item.completed,
-            project: item.project || "Work",
-            timeSlot: item.timeSlot || "14:30",
-            subtasks: Array.isArray(item.subtasks)
-              ? item.subtasks.map((st: any) => ({
-                  id: st.id || `sub-${Math.random().toString(36).substring(2, 11)}`,
-                  title: st.title || "Checklist Item",
-                  completed: !!st.completed,
-                }))
-              : [],
-            aiNudge: item.aiNudge || null,
-            aiBreakdownGenerated: !!item.aiBreakdownGenerated,
-          };
-        });
-
-        if (onImportTasks) {
-          if (importOverwrites) {
-            onImportTasks(validatedTasks);
-            setImportSuccess(`Restored ${validatedTasks.length} tasks successfully (database overwritten).`);
-          } else {
-            // Merge scenario with unique IDs
-            const existingTasksJson = localStorage.getItem("nudge_tasks") || "[]";
-            let localTasks: Task[] = [];
-            try {
-              localTasks = JSON.parse(existingTasksJson);
-            } catch (e) {
-              localTasks = [];
-            }
-            
-            const merged = [...localTasks];
-            let addedCount = 0;
-            validatedTasks.forEach((newT) => {
-              if (!merged.some((existing) => existing.id === newT.id)) {
-                merged.push(newT);
-                addedCount++;
-              }
-            });
-
-            onImportTasks(merged);
-            setImportSuccess(`Merged data! Added ${addedCount} new task entries (skipped ${validatedTasks.length - addedCount} duplicates).`);
-          }
-        } else {
-          // fallback direct write if prop is absent
-          localStorage.setItem("nudge_tasks", JSON.stringify(validatedTasks));
-          setImportSuccess(`Successfully stored ${validatedTasks.length} tasks locally. Please reload dashboard.`);
-        }
-      } catch (err: any) {
-        setImportError(err.message || "Failed to parse file. Ensure it is a valid format JSON exported from Nudge.");
-      }
-    };
-
-    reader.readAsText(file);
-    // clear input
-    e.target.value = "";
   };
 
   // Sound Sandbox test recording start
@@ -449,115 +343,129 @@ export default function Settings({
         </div>
       </section>
 
-      {/* Task Backup & Portability Storage Card */}
+      {/* Cloud Storage & Cross-Device Sync */}
       <section className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm space-y-4">
         <div className="flex items-center gap-2 text-slate-800">
-          <span className="material-symbols-outlined text-lg">inventory_2</span>
+          <span className="material-symbols-outlined text-lg">cloud_sync</span>
           <h3 className="font-headline text-sm font-bold uppercase tracking-wider">
-            3. Task Portability & Cloudless Backups
+            3. Cross-Device Cloud Sync
           </h3>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
-          {/* Export Box */}
-          <div className="border border-slate-150 rounded-xl p-4 bg-slate-50 flex flex-col justify-between space-y-3">
+        <div className="pt-1">
+          <div className="border border-slate-150 rounded-xl p-4 bg-slate-50 space-y-3">
             <div>
-              <span className="font-mono text-[9px] text-slate-400 uppercase font-bold tracking-wider">File Backup</span>
-              <h4 className="font-bold text-xs uppercase text-slate-800 mt-0.5">Export Task Database</h4>
+              <span className="font-mono text-[9px] text-slate-400 uppercase font-bold tracking-wider">Storage Mode</span>
+              <h4 className="font-bold text-xs uppercase text-slate-800 mt-0.5">Supabase Direct Sync Enabled</h4>
+              <p className="text-xs text-slate-500 mt-1 font-body">Your tasks are automatically saved directly to the cloud. Sign in with Google to sync them across all your devices seamlessly.</p>
             </div>
-            <div className="space-y-2">
-              <button
-                onClick={handleExportTasks}
-                className="w-full flex items-center justify-center gap-1.5 py-2 px-3 bg-slate-900 text-white hover:bg-slate-800 rounded-lg font-mono text-[10px] uppercase font-bold transition shadow-sm cursor-pointer"
-              >
-                <span className="material-symbols-outlined text-sm">download</span>
-                Export Backup JSON
-              </button>
-              <button
-                onClick={handleBackupToCloud}
-                disabled={!!cloudSyncStatus && cloudSyncStatus !== "Cloud Backup Complete ✓"}
-                className="w-full flex items-center justify-center gap-1.5 py-2 px-3 bg-indigo-600 text-white hover:bg-indigo-700 rounded-lg font-mono text-[10px] uppercase font-bold transition shadow-sm cursor-pointer disabled:opacity-50"
-              >
-                <span className="material-symbols-outlined text-sm">cloud_sync</span>
-                {cloudSyncStatus || "Sync to Firebase Cloud"}
-              </button>
-              
-              {setCloudSyncEnabled && (
-                <div className="flex items-center gap-2 pt-2 border-t border-slate-200 mt-2">
-                  <input
-                    type="checkbox"
-                    id="auto-cloud-sync"
-                    checked={cloudSyncEnabled}
-                    onChange={(e) => setCloudSyncEnabled(e.target.checked)}
-                    className="rounded border-slate-350 bg-white cursor-pointer"
-                  />
-                  <label htmlFor="auto-cloud-sync" className="font-mono text-[9px] uppercase font-bold text-slate-600 cursor-pointer">
-                    Enable Automatic Background Sync (Firebase)
-                  </label>
+            
+            <div className="pt-2">
+              {isGoogleSignedIn ? (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 text-emerald-600 bg-emerald-50 px-3 py-2 rounded-lg border border-emerald-100">
+                    <span className="material-symbols-outlined text-sm">check_circle</span>
+                    <span className="font-mono text-xs uppercase font-bold tracking-wider">Linked to Google Account</span>
+                  </div>
+                  <button
+                    onClick={handleGoogleSignOut}
+                    className="w-full flex items-center justify-center gap-1.5 py-2 px-3 bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 rounded-lg font-mono text-[10px] uppercase font-bold transition shadow-sm cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-sm">logout</span>
+                    Sign Out & Use Local Identity
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {typeof window !== "undefined" && window.self !== window.top && (
+                    <div className="p-4 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl text-xs leading-relaxed font-body space-y-2">
+                      <div className="flex items-center gap-1.5 font-mono font-bold uppercase tracking-wider text-[10px] text-amber-700">
+                        <span className="material-symbols-outlined text-sm">warning</span>
+                        Iframe Sandbox Restrictions Active
+                      </div>
+                      <p>You are currently accessing the application inside the embedded AI Studio preview iframe. Google blocks OAuth sign-ins inside nested frames due to security policies.</p>
+                      <p className="font-semibold text-amber-950">To connect your Google Account successfully:</p>
+                      <ol className="list-decimal list-inside space-y-1 pl-1 text-amber-900">
+                        <li>Click the <strong className="text-amber-950">Open in new tab</strong> button at the top-right of the AI Studio preview window.</li>
+                        <li>Go to Settings &rarr; Cross-Device Cloud Sync and click <strong>Connect Google Account for Sync</strong>.</li>
+                        <li>The authentication will complete seamlessly in your main tab and securely link your account!</li>
+                      </ol>
+                    </div>
+                  )}
+                  <button
+                    onClick={handleGoogleSignIn}
+                    className="w-full flex items-center justify-center gap-2 py-2.5 px-3 bg-[#4285F4] text-white hover:bg-[#3367D6] rounded-lg font-mono text-[11px] uppercase font-bold transition shadow-sm cursor-pointer"
+                  >
+                    <svg className="w-4 h-4 bg-white p-[2px] rounded-sm" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+                      <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                      <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+                      <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+                    </svg>
+                    Connect Google Account for Sync
+                  </button>
+                  {googleError && (
+                    <div className="p-3 bg-red-50 border border-red-100 text-red-600 rounded-lg text-xs font-mono space-y-1.5 leading-relaxed">
+                      <div className="flex items-center gap-1.5 font-bold uppercase tracking-wider text-[10px] text-red-700">
+                        <span className="material-symbols-outlined text-sm">warning</span>
+                        OAuth Action Required
+                      </div>
+                      <p>{googleError}</p>
+                    </div>
+                  )}
+
+                  {typeof window !== "undefined" && (
+                    <div className="p-4 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl text-xs leading-relaxed font-body space-y-3 mt-4">
+                      <div className="flex items-center gap-1.5 font-mono font-bold uppercase tracking-wider text-[10px] text-amber-700">
+                        <span className="material-symbols-outlined text-sm">error</span>
+                        Why you see "404 Page not found" on your Phone/Browser
+                      </div>
+                      <p className="text-amber-950 font-medium">
+                        Your Google account is actually signing in successfully (which is why you see your email in the Supabase Users list!), but the redirect is landing on a restricted URL. Here is why:
+                      </p>
+                      <ul className="list-disc list-inside space-y-1.5 text-amber-900 pl-1">
+                        <li>
+                          <strong>The Cause:</strong> The URL starting with <code className="bg-amber-100 px-1 py-0.5 rounded text-[10px]">ais-dev-...</code> is a private developer URL. It only works inside your Google AI Studio editor. Any other device (like your phone or another browser tab) is not authorized and will receive a Google Cloud Run <strong>"404 Page not found"</strong> page.
+                        </li>
+                        <li>
+                          <strong>The Solution:</strong> You should use your public production URL <code className="bg-amber-100 px-1.5 py-0.5 rounded text-[10px] text-amber-950 font-semibold">https://nudge-960957466764.asia-southeast1.run.app</code> or the safe preview URL starting with <code className="bg-amber-100 px-1.5 py-0.5 rounded text-[10px] text-amber-950 font-semibold">ais-pre-...</code>!
+                        </li>
+                      </ul>
+
+                      <div className="border-t border-amber-200 pt-2.5 space-y-2">
+                        <p className="font-semibold text-amber-950 uppercase tracking-wider text-[10px] font-mono">
+                          Follow these 3 simple steps in your Supabase Dashboard:
+                        </p>
+                        <ol className="list-decimal list-inside space-y-2.5 pl-1 text-amber-900">
+                          <li>
+                            Go to your <a href="https://supabase.com/dashboard/project/rpzzzbpaxdftxpldyzrb/auth/url-configuration" target="_blank" rel="noopener noreferrer" className="text-blue-700 hover:underline font-bold inline-flex items-center gap-0.5">Supabase URL Configuration <span className="material-symbols-outlined text-[10px]">open_in_new</span></a> page for project <code className="bg-amber-100 px-1 py-0.5 rounded font-bold">rpzzzbpaxdftxpldyzrb</code>.
+                          </li>
+                          <li>
+                            Change the <strong>Site URL</strong> field to exactly:
+                            <div className="mt-1 p-2.5 bg-white border border-amber-200 rounded-lg font-mono text-[10px] select-all break-all text-slate-900 font-bold bg-amber-50/50 border-dashed">
+                              https://nudge-960957466764.asia-southeast1.run.app
+                            </div>
+                          </li>
+                          <li>
+                            In the <strong>Redirect URLs</strong> section below it, click <strong>Add URL</strong> and add both of these exact URLs:
+                            <div className="mt-1 p-2.5 bg-white border border-amber-200 rounded-lg font-mono text-[10px] select-all break-all text-slate-900 font-bold bg-amber-50/50 border-dashed space-y-1.5">
+                              <div>https://nudge-960957466764.asia-southeast1.run.app</div>
+                              <div>{window.location.origin.replace("ais-dev-", "ais-pre-")}</div>
+                            </div>
+                          </li>
+                        </ol>
+                      </div>
+                      
+                      <div className="bg-amber-100/50 p-2.5 rounded-lg border border-amber-200 text-[11px] text-amber-950 font-medium">
+                        💡 <strong>After Saving:</strong> Access the app through <a href="https://nudge-960957466764.asia-southeast1.run.app" target="_blank" rel="noopener noreferrer" className="text-amber-950 underline font-bold">https://nudge-960957466764.asia-southeast1.run.app</a> on your phone, and sign in. It will redirect perfectly and connect your account without any 404 errors!
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
           </div>
-
-          {/* Import Box */}
-          <div className="border border-slate-150 rounded-xl p-4 bg-slate-50 flex flex-col justify-between space-y-3">
-            <div>
-              <span className="font-mono text-[9px] text-slate-400 uppercase font-bold tracking-wider">Restore Database</span>
-              <h4 className="font-bold text-xs uppercase text-slate-800 mt-0.5">Import Task Archive</h4>
-            </div>
-
-            <div className="space-y-2">
-              {/* Overwrite Toggle options */}
-              <div className="flex items-center gap-2 select-none">
-                <input
-                  type="checkbox"
-                  id="import-overwrite"
-                  checked={importOverwrites}
-                  onChange={(e) => setImportOverwrites(e.target.checked)}
-                  className="rounded border-slate-350 bg-white"
-                />
-                <label htmlFor="import-overwrite" className="font-mono text-[10px] uppercase font-bold text-slate-600 cursor-pointer">
-                  Overwrite local tasks completely
-                </label>
-              </div>
-
-              {/* Upload Input Button */}
-              <div className="flex gap-2">
-                <label className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 border border-dashed border-slate-300 hover:border-slate-400 hover:bg-slate-100 rounded-lg font-mono text-[10px] uppercase font-bold transition cursor-pointer text-slate-700 text-center">
-                  <span className="material-symbols-outlined text-sm">upload_file</span>
-                  Upload JSON
-                  <input
-                    type="file"
-                    accept=".json"
-                    onChange={handleImportFile}
-                    className="hidden"
-                  />
-                </label>
-                <button
-                  onClick={handleRestoreFromCloud}
-                  className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 bg-emerald-600 text-white hover:bg-emerald-700 rounded-lg font-mono text-[10px] uppercase font-bold transition shadow-sm cursor-pointer"
-                >
-                  <span className="material-symbols-outlined text-sm">cloud_download</span>
-                  Cloud Restore
-                </button>
-              </div>
-            </div>
-          </div>
         </div>
-
-        {importError && (
-          <p className="text-red-500 text-xs font-mono uppercase bg-red-50 border border-red-100 p-2.5 rounded-lg flex items-center gap-1.5">
-            <span className="material-symbols-outlined text-base">error</span>
-            {importError}
-          </p>
-        )}
-
-        {importSuccess && (
-          <p className="text-emerald-700 text-xs font-mono uppercase bg-emerald-50 border border-emerald-100 p-2.5 rounded-lg flex items-center gap-1.5">
-            <span className="material-symbols-outlined text-base">task_alt</span>
-            {importSuccess}
-          </p>
-        )}
       </section>
 
       {/* Dangerous Wipe controls */}

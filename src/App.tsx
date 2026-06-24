@@ -9,7 +9,7 @@ import Settings from "./components/Settings";
 import Analytics from "./components/Analytics";
 import ErrorBoundary from "./components/ErrorBoundary";
 import InstallPrompt from "./components/InstallPrompt";
-import { signInUserAnonymously, saveTask, deleteTask as deleteFirebaseTask, getTasks } from "./firebase";
+import { signInUserAnonymously, saveTask, deleteTask as deleteCloudTask, subscribeToTasks, saveUserProfile, getUserProfile, isSupabaseConfigured, checkSupabaseConnection } from "./supabase";
 
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -19,7 +19,9 @@ export default function App() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [notifiedTaskIds, setNotifiedTaskIds] = useState<Set<string>>(new Set());
   const [isLoadingInitial, setIsLoadingInitial] = useState(true);
-  const [cloudSyncEnabled, setCloudSyncEnabled] = useState(false);
+  const [supabaseUserId, setSupabaseUserId] = useState<string | null>(null);
+  const [supabaseUser, setSupabaseUser] = useState<any>(null);
+  const [dbStatus, setDbStatus] = useState<"checking" | "connected" | "error">("checking");
 
   // Online/Offline tracking state
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -37,94 +39,98 @@ export default function App() {
     };
   }, []);
 
-  const triggerBackgroundSync = async (task: Task, action: 'save' | 'delete') => {
-    if (!cloudSyncEnabled || !isOnline) return;
-    try {
-      const userId = await signInUserAnonymously();
-      if (action === 'save') {
-        await saveTask(userId, task);
-      } else {
-        await deleteFirebaseTask(userId, task.id);
-      }
-    } catch (e) {
-      console.error("Background sync failed for task", task.id, e);
-    }
-  };
-
-  // Initialize and load from local storage
+  // Initialize Auth and Tasks Subscription
   useEffect(() => {
-    const initApp = async () => {
-      const savedTasks = localStorage.getItem("nudge_tasks");
-      const savedName = localStorage.getItem("nudge_username");
-      const savedNotified = localStorage.getItem("nudge_notified_tasks");
-      const schemaVersion = localStorage.getItem("nudge_schema_version");
-      const syncEnabledStr = localStorage.getItem("nudge_cloud_sync");
-      
-      let isSyncEnabled = false;
-      if (syncEnabledStr === "true") {
-        setCloudSyncEnabled(true);
-        isSyncEnabled = true;
+    const savedName = localStorage.getItem("nudge_username");
+    const savedNotified = localStorage.getItem("nudge_notified_tasks");
+    
+    if (savedName) setUserName(savedName);
+    if (savedNotified) {
+      try {
+        setNotifiedTaskIds(new Set(JSON.parse(savedNotified)));
+      } catch (err) {
+        console.error("Failed to parse notified tasks:", err);
       }
-      
-      let localTasks: Task[] = [];
-      if (savedTasks) {
-        try {
-          const parsed = JSON.parse(savedTasks);
-          if (Array.isArray(parsed)) {
-            localTasks = parsed.map((t: any) => ({
-              ...t,
-              subtasks: Array.isArray(t.subtasks) ? t.subtasks : [],
-            }));
-            
-            if (schemaVersion !== "2") {
-              localTasks = localTasks.map(t => ({
-                ...t,
-                project: t.project || "Task"
-              }));
-              localStorage.setItem("nudge_schema_version", "2");
-              localStorage.setItem("nudge_tasks", JSON.stringify(localTasks));
-            }
+    }
 
-            setTasks(localTasks);
+    // Check Supabase connection immediately
+    checkSupabaseConnection().then(isConnected => {
+      setDbStatus(isConnected ? "connected" : "error");
+    });
+
+    // Subscribe to Auth State (handles both anonymous and Google users)
+    let unsubscribe: (() => void) | undefined;
+    import("./supabase").then(({ auth, signInUserAnonymously }) => {
+      unsubscribe = auth.onAuthStateChanged(async (user: any) => {
+        if (user) {
+          setSupabaseUserId(user.id);
+          setSupabaseUser(user);
+        } else {
+          // If we are currently processing a redirect hash or query code, DO NOT trigger anonymous sign in
+          // to prevent race conditions overwriting the social login session!
+          const isCallback = window.location.hash.includes("access_token") || 
+                             window.location.hash.includes("id_token") ||
+                             window.location.search.includes("code");
+          if (isCallback) {
+            console.log("OAuth callback detected in URL, waiting for session load and skipping anonymous fallback.");
+            return;
           }
-        } catch (err) {
-          console.error("Local storage decode error:", err);
-        }
-      } else {
-        localStorage.setItem("nudge_schema_version", "2");
-      }
-      
-      if (savedName) {
-        setUserName(savedName);
-      }
-      if (savedNotified) {
-        try {
-          setNotifiedTaskIds(new Set(JSON.parse(savedNotified)));
-        } catch (err) {
-          console.error("Failed to parse notified tasks:", err);
-        }
-      }
 
-      // If cloud sync is enabled, fetch latest from Firestore in background
-      if (isSyncEnabled && navigator.onLine) {
-        try {
-          const userId = await signInUserAnonymously();
-          const cloudTasks = await getTasks(userId);
-          if (cloudTasks && cloudTasks.length > 0) {
-            // merge or replace. A simple approach is just replace.
-            setTasks(cloudTasks);
-            localStorage.setItem("nudge_tasks", JSON.stringify(cloudTasks));
-          }
-        } catch(e) {
-          console.error("Failed to fetch tasks on load:", e);
+          // If no user, ensure we sign in anonymously at least
+          const uid = await signInUserAnonymously();
+          setSupabaseUserId(uid);
+          setSupabaseUser(null);
         }
-      }
+      });
+    });
 
-      setIsLoadingInitial(false);
+    return () => {
+      if (unsubscribe) unsubscribe();
     };
-
-    setTimeout(initApp, 300);
   }, []);
+
+  // Subscribe to tasks directly from Supabase
+  useEffect(() => {
+    if (!supabaseUserId) return;
+    
+    // Fetch profile
+    getUserProfile(supabaseUserId).then(async (profile) => {
+      if (profile) {
+        setUserName(profile.userName);
+      } else {
+        // If profile doesn't exist, let's create a default one so they appear in Supabase public.users!
+        let nameToUse = userName || "Alex";
+        
+        // If they are a Google user, extract name from metadata if available
+        if (supabaseUser?.user_metadata) {
+          const meta = supabaseUser.user_metadata;
+          const fullName = meta.full_name || meta.name || meta.given_name || meta.email?.split("@")[0];
+          if (fullName) {
+            nameToUse = fullName;
+          }
+        }
+        
+        // Save this name locally and to Supabase users table
+        setUserName(nameToUse);
+        localStorage.setItem("nudge_username", nameToUse);
+        try {
+          await saveUserProfile(supabaseUserId, nameToUse);
+        } catch (err) {
+          console.error("Failed to auto-save user profile:", err);
+        }
+      }
+    });
+    
+    // Subscribe to Supabase for real-time and offline capabilities
+    const unsubscribe = subscribeToTasks(supabaseUserId, (fetchedTasks) => {
+      setTasks(fetchedTasks);
+      setIsLoadingInitial(false);
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [supabaseUserId, supabaseUser]);
 
   // Push notification trigger for Urgent Tasks
   useEffect(() => {
@@ -161,20 +167,19 @@ export default function App() {
     }
   }, [tasks, notifiedTaskIds]);
 
-  // Save state locally
-  const saveTasksState = async (newTasks: Task[]) => {
-    setTasks(newTasks);
-    localStorage.setItem("nudge_tasks", JSON.stringify(newTasks));
-  };
-
+  // Save userName
   const saveUserNameState = async (newName: string) => {
     setUserName(newName);
     localStorage.setItem("nudge_username", newName);
+    if (supabaseUserId) {
+      await saveUserProfile(supabaseUserId, newName);
+    }
   };
 
   // Toggle checklist complete
   const handleToggleComplete = async (id: string, e: React.MouseEvent | React.ChangeEvent) => {
     e.stopPropagation(); // prevent opening task details
+    if (!supabaseUserId) return;
     
     let updatedTask: Task | null = null;
     const updated = tasks.map(task => {
@@ -190,18 +195,23 @@ export default function App() {
       return task;
     });
 
+    // Optimistic UI update
     setTasks(updated);
-    localStorage.setItem("nudge_tasks", JSON.stringify(updated));
-    if (updatedTask) triggerBackgroundSync(updatedTask, 'save');
+    if (updatedTask) {
+      await saveTask(supabaseUserId, updatedTask);
+    }
   };
 
   // Single task updated from details panel in real-time
   const handleUpdateTask = async (updatedTask: Task) => {
+    if (!supabaseUserId) return;
+
+    // Optimistic UI update
     setTasks(prevTasks => {
       if (!prevTasks.some(t => t.id === updatedTask.id)) {
         return prevTasks; // It was deleted, do not resurrect!
       }
-      const updated = prevTasks.map(t => {
+      return prevTasks.map(t => {
         if (t.id === updatedTask.id) {
           const subtasks = (updatedTask.subtasks && updatedTask.subtasks.length > 0) 
             ? updatedTask.subtasks 
@@ -226,25 +236,28 @@ export default function App() {
         }
         return t;
       });
-      localStorage.setItem("nudge_tasks", JSON.stringify(updated));
-      return updated;
     });
-    triggerBackgroundSync(updatedTask, 'save');
+    
+    // Save to Supabase
+    await saveTask(supabaseUserId, updatedTask);
   };
 
   // Task deleted
   const handleDeleteTask = async (id: string) => {
-    const taskToDelete = tasks.find(t => t.id === id);
+    if (!supabaseUserId) return;
+    
     const filtered = tasks.filter(t => t.id !== id);
-    setTasks(filtered);
-    localStorage.setItem("nudge_tasks", JSON.stringify(filtered));
+    setTasks(filtered); // Optimistic UI
     setSelectedTaskId(null);
     setActiveTab("dashboard");
-    if (taskToDelete) triggerBackgroundSync(taskToDelete, 'delete');
+    
+    await deleteCloudTask(supabaseUserId, id);
   };
 
   // Add a new task submission
   const handleAddTask = async (newTaskData: Omit<Task, "id" | "completed" | "subtasks">) => {
+    if (!supabaseUserId) return;
+    
     const freshTask: Task = {
       ...newTaskData,
       id: `task-${Date.now()}`,
@@ -253,18 +266,33 @@ export default function App() {
     };
 
     const updated = [freshTask, ...tasks];
-    setTasks(updated);
-    localStorage.setItem("nudge_tasks", JSON.stringify(updated));
+    setTasks(updated); // Optimistic UI
     setActiveTab("dashboard");
     setSelectedTaskId(null);
-    triggerBackgroundSync(freshTask, 'save');
+    
+    try {
+      await saveTask(supabaseUserId, freshTask);
+    } catch (e: any) {
+      alert("Failed to save to Supabase: " + e.message);
+    }
   };
 
   // Purge entire task database
   const handleClearAllTasks = async () => {
-    await saveTasksState([]);
+    if (!supabaseUserId) return;
+    const taskIds = tasks.map(t => t.id);
+    setTasks([]); // Optimistic
     setSelectedTaskId(null);
     setActiveTab("dashboard");
+    
+    // Process all deletions
+    for (const id of taskIds) {
+      try {
+        await deleteCloudTask(supabaseUserId, id);
+      } catch (e) {
+        console.error("Failed to delete task", id);
+      }
+    }
   };
 
   // Calculate high priority nudge alerts to display in notifications bell icon
@@ -298,9 +326,14 @@ export default function App() {
       <header className="sticky top-[env(safe-area-inset-top,0px)] z-40 text-white h-[62px] flex items-center justify-between shadow-none w-[375px] max-w-full mx-auto pt-0 pl-[10px] pr-4 mt-[3px] mb-0 border-0 rounded-[123px] bg-black">
         <div 
           onClick={() => handleNavigateToTab("dashboard")}
-          className="flex items-center cursor-pointer select-none group ml-[20px] pl-0"
+          className="flex items-center cursor-pointer select-none group ml-[20px] pl-0 relative"
           title="Nudge Pro"
         >
+          {/* Subtle DB Connection Indicator */}
+          <div 
+            className={`absolute -left-3 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full ${dbStatus === 'connected' ? 'bg-green-500' : dbStatus === 'error' ? 'bg-red-500 animate-pulse' : 'bg-yellow-500'}`} 
+            title={`Database: ${dbStatus}`}
+          />
           {/* Stylish N Alphabet Only */}
           <div className="h-10 w-10 pl-0 ml-0 bg-white text-black font-extrabold flex items-center justify-center rounded-xl shadow-[0_4px_12px_rgba(0,0,0,0.5)] border border-zinc-200 group-hover:bg-zinc-100 group-hover:scale-105 active:scale-95 transition-all duration-300 relative overflow-hidden">
             <span className="text-2xl font-serif italic font-black tracking-tighter leading-none select-none pl-[2px]">
@@ -431,12 +464,6 @@ export default function App() {
               onUpdateUserName={saveUserNameState}
               onClearAllTasks={handleClearAllTasks}
               totalTasksCount={tasks.length}
-              onImportTasks={saveTasksState}
-              cloudSyncEnabled={cloudSyncEnabled}
-              setCloudSyncEnabled={(enabled: boolean) => {
-                setCloudSyncEnabled(enabled);
-                localStorage.setItem("nudge_cloud_sync", enabled ? "true" : "false");
-              }}
             />
           )}
         </ErrorBoundary>
