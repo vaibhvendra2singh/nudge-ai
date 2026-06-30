@@ -47,7 +47,11 @@ export default function App() {
 
   // Initialize Auth and Tasks Subscription
   useEffect(() => {
-    const savedName = localStorage.getItem("nudge_username");
+    let savedName = localStorage.getItem("nudge_username");
+    if (savedName === "Alex" || savedName === "ALEX") {
+      savedName = "User";
+      localStorage.setItem("nudge_username", "User");
+    }
     const savedNotified = localStorage.getItem("nudge_notified_tasks");
     
     if (savedName) setUserName(savedName);
@@ -102,7 +106,17 @@ export default function App() {
     // Fetch profile
     getUserProfile(supabaseUserId).then(async (profile) => {
       if (profile) {
-        setUserName(profile.userName);
+        let finalName = profile.userName;
+        if (finalName === "Alex" || finalName === "ALEX") {
+          finalName = "User";
+          localStorage.setItem("nudge_username", "User");
+          try {
+            await saveUserProfile(supabaseUserId, "User");
+          } catch (err) {
+            console.error("Failed to migrate profile name to User:", err);
+          }
+        }
+        setUserName(finalName);
       } else {
         // If profile doesn't exist, let's create a default one so they appear in Supabase public.users!
         let nameToUse = userName || "User";
