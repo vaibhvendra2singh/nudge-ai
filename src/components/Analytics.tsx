@@ -300,14 +300,6 @@ export default function Analytics({ tasks, userName }: AnalyticsProps) {
                 Rebuilding predictive brain models...
               </p>
             </div>
-          ) : error && !aiData ? (
-            <div className="bg-amber-50 border border-amber-200/65 rounded-xl p-4 text-amber-800 space-y-2">
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-amber-700 font-bold text-lg">warning</span>
-                <h4 className="font-headline font-bold text-xs uppercase tracking-wider">Warning model error</h4>
-              </div>
-              <p className="font-mono text-[10px] uppercase leading-relaxed text-amber-900">{error}</p>
-            </div>
           ) : (!aiData || aiData.riskWarnings.length === 0) ? (
             <div className="py-8 text-center bg-slate-25/50 border border-dashed border-slate-200 rounded-xl">
               <span className="material-symbols-outlined text-slate-300 text-3xl">sentiment_satisfied</span>

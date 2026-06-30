@@ -136,12 +136,37 @@ function getLocalFallbackNudge(title: string, priority: string, deadline: string
 }
 
 // Call Gemini generateContent API with robust retry mechanism and backup model fallbacks
-async function callGeminiWithFallback(contents: string | any[], config: any): Promise<any> {
+async function callGeminiWithFallback(contents: any, config: any): Promise<any> {
   const ai = getAiClient();
+  
+  // Detect if the request contains audio to select the appropriate fallback model.
+  // gemini-3.1-flash-lite does NOT support audio inputs, so we fall back to gemini-flash-latest.
+  let isAudioRequest = false;
+  try {
+    if (contents) {
+      if (Array.isArray(contents)) {
+        isAudioRequest = contents.some(item => {
+          if (item && item.parts && Array.isArray(item.parts)) {
+            return item.parts.some((part: any) => part && part.inlineData && part.inlineData.mimeType?.startsWith("audio/"));
+          }
+          if (item && item.inlineData && item.inlineData.mimeType?.startsWith("audio/")) {
+            return true;
+          }
+          return false;
+        });
+      } else if (contents.parts && Array.isArray(contents.parts)) {
+        isAudioRequest = contents.parts.some((part: any) => part && part.inlineData && part.inlineData.mimeType?.startsWith("audio/"));
+      }
+    }
+  } catch (e) {
+    console.error("Error detecting audio in contents:", e);
+  }
+
+  const fallbackModel = isAudioRequest ? "gemini-flash-latest" : "gemini-3.1-flash-lite";
   
   // Try 1: Main 'gemini-3.5-flash' model
   try {
-    console.log("Calling Gemini using 'gemini-3.5-flash'...");
+    console.log(`Calling Gemini using 'gemini-3.5-flash' (isAudio: ${isAudioRequest})...`);
     const response = await ai.models.generateContent({
       model: "gemini-3.5-flash",
       contents,
@@ -149,22 +174,21 @@ async function callGeminiWithFallback(contents: string | any[], config: any): Pr
     });
     return response;
   } catch (error: any) {
-    console.warn("Primary model 'gemini-3.5-flash' is experiencing issues or high load:", error?.message || error);
+    console.warn(`Primary model 'gemini-3.5-flash' failed (isAudio: ${isAudioRequest}):`, error?.message || error);
     
-    // Check if the error looks like something we can retry with gemini-3.1-flash-lite
-    console.log("Attempting fallback call to 'gemini-3.1-flash-lite'...");
+    console.log(`Attempting fallback call to '${fallbackModel}'...`);
     try {
       const response = await ai.models.generateContent({
-        model: "gemini-3.1-flash-lite",
+        model: fallbackModel,
         contents,
         config
       });
-      console.log("Success with 'gemini-3.1-flash-lite' fallback!");
+      console.log(`Success with '${fallbackModel}' fallback!`);
       return response;
     } catch (fallbackError: any) {
-      console.error("Fallback model 'gemini-3.1-flash-lite' also failed:", fallbackError?.message || fallbackError);
-      // Return null, indicating caller must use local fallback
-      return null;
+      console.error(`Fallback model '${fallbackModel}' also failed:`, fallbackError?.message || fallbackError);
+      // Throw the error so the frontend can display API key or quota issues clearly
+      throw new Error(error?.message || fallbackError?.message || "Gemini API request failed.");
     }
   }
 }
@@ -343,86 +367,6 @@ Write exactly one sentence.`;
   }
 });
 
-// 4. API Route: AI natural language speech task extraction
-app.post("/api/gemini/extract-task", async (req: express.Request, res: express.Response): Promise<void> => {
-  const { speechText, currentDate } = req.body;
-  if (!speechText) {
-    res.status(400).json({ error: "Missing speechText parameter." });
-    return;
-  }
-
-  try {
-    const prompt = `Translate this natural language speech transcription into a structured task.
-Base any relative date/time calculation on the provided reference current date and time context: ${currentDate || new Date().toISOString()}.
-
-Speech transcription: "${speechText}"
-
-We need to fill the following task properties:
-1. title: A short, active, capitalized task objective (e.g. "Call the dentist" instead of "remind me to call the dentist").
-2. details: Any supplementary information or context spoken.
-3. deadline: Specific target date in YYYY-MM-DD format (essential: if referencing relative expressions like "by friday" or "tomorrow", compute the exact date using the current date reference).
-4. timeSlot: HH:MM format (e.g. "17:00" if spoken "5pm", default to "14:30" if unspecified).
-5. priority: One of "low", "medium", "high".
-6. project: One of "Work", "Personal", "Deep Work", "Marketing" or custom brief context tag.
-
-Respond with valid JSON exactly fitting the schema.`;
-
-    const config = {
-      systemInstruction: "You are an intelligent scheduler assistant. Accurately extract task parameters from speech. Always resolve relative dates (like 'tomorrow', 'next week', 'Friday') into valid YYYY-MM-DD strings based on the given currentDate reference. Give concise responses.",
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          title: { type: Type.STRING, description: "Capitalized short actionable title." },
-          details: { type: Type.STRING, description: "Clean context or additional instructions." },
-          deadline: { type: Type.STRING, description: "YYYY-MM-DD date string." },
-          timeSlot: { type: Type.STRING, description: "HH:MM format time slot." },
-          priority: { type: Type.STRING, description: "Must be 'low', 'medium', or 'high'." },
-          project: { type: Type.STRING, description: "The project tag name." }
-        },
-        required: ["title", "details", "deadline", "timeSlot", "priority", "project"]
-      }
-    };
-
-    const response = await callGeminiWithFallback(prompt, config);
-    if (response && response.text) {
-      const data = cleanAndParseJSON(response.text);
-      if (data && data.title) {
-        res.json(data);
-        return;
-      }
-    }
-
-    // Fallback if AI fails or returns invalid structure
-    const today = new Date();
-    const yyyy = today.getFullYear();
-    const mm = String(today.getMonth() + 1).padStart(2, "0");
-    const dd = String(today.getDate()).padStart(2, "0");
-    res.json({
-      title: speechText.slice(0, 40).toUpperCase(),
-      details: speechText,
-      deadline: `${yyyy}-${mm}-${dd}`,
-      timeSlot: "14:30",
-      priority: "medium",
-      project: "Work"
-    });
-  } catch (error: any) {
-    console.error("Unhandled error in /api/gemini/extract-task, using basic fallback:", error);
-    const today = new Date();
-    const yyyy = today.getFullYear();
-    const mm = String(today.getMonth() + 1).padStart(2, "0");
-    const dd = String(today.getDate()).padStart(2, "0");
-    res.json({
-      title: speechText.slice(0, 40).toUpperCase(),
-      details: speechText,
-      deadline: `${yyyy}-${mm}-${dd}`,
-      timeSlot: "14:30",
-      priority: "medium",
-      project: "Work"
-    });
-  }
-});
-
 app.post("/api/gemini/parse-deadline", async (req: express.Request, res: express.Response): Promise<void> => {
   const { text, currentDate } = req.body;
   if (!text) {
@@ -471,79 +415,7 @@ Return a JSON object with 'deadline' (YYYY-MM-DD format) and 'timeSlot' (HH:MM f
   }
 });
 
-app.post("/api/gemini/voice-task-audio", async (req: express.Request, res: express.Response): Promise<void> => {
-  const { audioData, mimeType, currentDate } = req.body;
-  
-  if (!audioData || !mimeType) {
-    res.status(400).json({ error: "Missing audioData or mimeType" });
-    return;
-  }
 
-  try {
-    // Sanitize the mimeType by removing extra parameters like ;codecs=opus which cause Gemini errors
-    let cleanMimeType = mimeType.split(";")[0].trim();
-    if (!cleanMimeType) {
-      cleanMimeType = "audio/webm";
-    }
-
-    const prompt = `You are an intelligent scheduler assistant. 
-Accurately transcribe the attached audio clip, and extract task parameters from it. 
-Always resolve relative dates (like 'tomorrow', 'next week', 'Friday') into valid YYYY-MM-DD strings based on the given currentDate reference. Give concise responses.
-Current Date Reference: ${currentDate || new Date().toISOString()}
-
-We need to fill the following task properties:
-1. title: A short, active, capitalized task objective (e.g. "Call the dentist").
-2. details: Any supplementary information or context spoken.
-3. deadline: Specific target date in YYYY-MM-DD format.
-4. timeSlot: HH:MM format (e.g. "17:00" if spoken "5pm", default to "14:30").
-5. priority: One of "low", "medium", "high".
-6. project: One of "Work", "Personal", "Deep Work", "Marketing" or custom brief context tag.
-
-Return a JSON object exactly fitting the schema. Include a 'transcript' property containing the exact text you heard.`;
-
-    const config = {
-      systemInstruction: "You are an intelligent scheduler assistant. Transcribe the audio and extract task data.",
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          transcript: { type: Type.STRING, description: "The exact transcript of the audio" },
-          title: { type: Type.STRING, description: "Capitalized short actionable title." },
-          details: { type: Type.STRING, description: "Clean context or additional instructions." },
-          deadline: { type: Type.STRING, description: "YYYY-MM-DD date string." },
-          timeSlot: { type: Type.STRING, description: "HH:MM format time slot." },
-          priority: { type: Type.STRING, description: "Must be 'low', 'medium', or 'high'." },
-          project: { type: Type.STRING, description: "The project tag name." }
-        },
-        required: ["transcript", "title", "details", "deadline", "timeSlot", "priority", "project"]
-      }
-    };
-
-    const contents = [
-      {
-        inlineData: {
-          mimeType: cleanMimeType,
-          data: audioData
-        }
-      },
-      { text: prompt }
-    ];
-
-    const response = await callGeminiWithFallback(contents, config);
-    if (response && response.text) {
-      const data = cleanAndParseJSON(response.text);
-      if (data && data.title) {
-        res.json(data);
-        return;
-      }
-    }
-
-    res.status(500).json({ error: "Failed to extract data from audio." });
-  } catch (error: any) {
-    console.error("Error processing audio in /api/gemini/voice-task-audio", error);
-    res.status(500).json({ error: "Internal error processing audio." });
-  }
-});
 
 // Helper interfaces for Pattern Analysis
 interface RiskWarning {
@@ -833,7 +705,7 @@ app.post("/api/gemini/chat", async (req: express.Request, res: express.Response)
 
     const chatSession = await ai.chats.create({
       model: "gemini-3.5-flash",
-      history,
+      ...(history.length > 0 ? { history } : {}),
       config: {
         systemInstruction: "You are an AI assistant built into Nudge, a productivity and task management app. Keep your answers concise, helpful, and direct. You can help the user organize thoughts, plan their day, or discuss task execution.",
       }
@@ -856,7 +728,7 @@ app.post("/api/gemini/chat", async (req: express.Request, res: express.Response)
       const latestMessage = messages[messages.length - 1]?.content || "";
       const chatSession = await ai.chats.create({
         model: "gemini-3.1-flash-lite",
-        history,
+        ...(history.length > 0 ? { history } : {}),
         config: {
           systemInstruction: "You are an AI assistant built into Nudge, a productivity and task management app. Keep your answers concise, helpful, and direct.",
         }

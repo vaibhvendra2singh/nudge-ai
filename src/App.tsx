@@ -27,6 +27,11 @@ export default function App() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
   useEffect(() => {
+    // Force clear any old stuck task draft to resolve the 'M' letter issue
+    try {
+      localStorage.removeItem("nudge_add_task_draft");
+    } catch (e) {}
+    
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
 

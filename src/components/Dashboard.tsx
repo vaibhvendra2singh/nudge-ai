@@ -3,6 +3,43 @@ import { Task } from "../types";
 import { getTaskUrgencyDetails } from "../utils";
 import Chatbot from "./Chatbot";
 
+const TaskProgressRing = ({ subtasks }: { subtasks: Task["subtasks"] }) => {
+  if (!subtasks || subtasks.length === 0) return null;
+  const total = subtasks.length;
+  const completed = subtasks.filter(s => s.completed).length;
+  const percentage = (completed / total) * 100;
+  
+  const radius = 7;
+  const circumference = 2 * Math.PI * radius;
+  const strokeDashoffset = circumference - (percentage / 100) * circumference;
+
+  return (
+    <div className="flex items-center gap-1" title={`${completed}/${total} subtasks completed`}>
+      <div className="relative w-4 h-4 flex items-center justify-center">
+        <svg className="w-full h-full transform -rotate-90" viewBox="0 0 24 24">
+          <circle
+            cx="12" cy="12" r={radius}
+            stroke="currentColor"
+            strokeWidth="3.5"
+            fill="none"
+            className="text-slate-200"
+          />
+          <circle
+            cx="12" cy="12" r={radius}
+            stroke="currentColor"
+            strokeWidth="3.5"
+            fill="none"
+            strokeDasharray={circumference}
+            strokeDashoffset={strokeDashoffset}
+            className={`${percentage === 100 ? 'text-emerald-500' : 'text-slate-800'} transition-all duration-300`}
+            strokeLinecap="round"
+          />
+        </svg>
+      </div>
+    </div>
+  );
+};
+
 interface DashboardProps {
   tasks: Task[];
   onToggleComplete: (id: string, e: React.MouseEvent | React.ChangeEvent) => void;
@@ -247,6 +284,7 @@ export default function Dashboard({
                         </h4>
                       </div>
                       <div className="flex-shrink-0 flex items-center gap-1 font-mono text-[10px] text-red-700 font-bold">
+                        <TaskProgressRing subtasks={task.subtasks} />
                         <span className="material-symbols-outlined text-[13px] font-bold">schedule</span>
                         <span>{timeLabel}</span>
                       </div>
@@ -278,6 +316,7 @@ export default function Dashboard({
                         </h4>
                       </div>
                       <div className="flex-shrink-0 flex items-center gap-1 font-mono text-[10px] text-red-700 font-bold">
+                        <TaskProgressRing subtasks={task.subtasks} />
                         <span className="material-symbols-outlined text-[13px] font-bold">schedule</span>
                         <span>{timeLabel}</span>
                       </div>
@@ -329,6 +368,7 @@ export default function Dashboard({
 
                   <div className="flex items-center justify-between mt-4">
                     <div className="flex items-center text-slate-800 font-mono text-xs uppercase tracking-wide gap-1">
+                      <TaskProgressRing subtasks={task.subtasks} />
                       <span className="material-symbols-outlined text-[16px] text-slate-700 font-bold">schedule</span>
                       <span className="font-bold">{timeLabel}</span>
                     </div>
@@ -386,6 +426,7 @@ export default function Dashboard({
                       {task.title}
                     </h3>
                     <div className="flex items-center gap-2 mt-0.5">
+                      <TaskProgressRing subtasks={task.subtasks} />
                       <span className="font-mono text-[10px] text-slate-400 uppercase font-bold">
                         {task.project || "Task"}
                       </span>
@@ -447,6 +488,7 @@ export default function Dashboard({
                       {task.title}
                     </h3>
                     <div className="flex items-center gap-2 mt-0.5">
+                      <TaskProgressRing subtasks={task.subtasks} />
                       <span className="font-mono text-[10px] text-slate-400 uppercase">
                         {task.project || "Task"}
                       </span>
@@ -503,6 +545,7 @@ export default function Dashboard({
                       {task.title}
                     </h3>
                     <div className="flex items-center gap-2 text-[9px] text-slate-400 uppercase font-mono">
+                      <TaskProgressRing subtasks={task.subtasks} />
                       <span>{task.project}</span>
                       <span>•</span>
                       <span>Completed</span>
@@ -563,6 +606,7 @@ export default function Dashboard({
                       {task.title}
                     </h3>
                     <div className="flex items-center gap-2 text-[9px] text-slate-400 uppercase font-mono">
+                      <TaskProgressRing subtasks={task.subtasks} />
                       <span>{task.project}</span>
                       <span>•</span>
                       <span>Archived</span>
