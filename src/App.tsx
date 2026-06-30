@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Task } from "./types";
-import { getTaskUrgencyDetails } from "./utils";
+import { getTaskUrgencyDetails, playNudgeChime } from "./utils";
 import Dashboard from "./components/Dashboard";
 import Calendar from "./components/Calendar";
 import TaskDetail from "./components/TaskDetail";
@@ -15,9 +15,10 @@ export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [activeTab, setActiveTab] = useState<"dashboard" | "calendar" | "analytics" | "add_task" | "settings">("dashboard");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [userName, setUserName] = useState("Alex");
+  const [userName, setUserName] = useState("User");
   const [showNotifications, setShowNotifications] = useState(false);
   const [notifiedTaskIds, setNotifiedTaskIds] = useState<Set<string>>(new Set());
+  const [notifiedSlots, setNotifiedSlots] = useState<Set<string>>(new Set());
   const [isLoadingInitial, setIsLoadingInitial] = useState(true);
   const [supabaseUserId, setSupabaseUserId] = useState<string | null>(null);
   const [supabaseUser, setSupabaseUser] = useState<any>(null);
@@ -104,7 +105,7 @@ export default function App() {
         setUserName(profile.userName);
       } else {
         // If profile doesn't exist, let's create a default one so they appear in Supabase public.users!
-        let nameToUse = userName || "Alex";
+        let nameToUse = userName || "User";
         
         // If they are a Google user, extract name from metadata if available
         if (supabaseUser?.user_metadata) {
@@ -171,6 +172,57 @@ export default function App() {
       }
     }
   }, [tasks, notifiedTaskIds]);
+
+  // Active slot tracking for notifications & audio reminders
+  useEffect(() => {
+    const checkScheduledSlots = () => {
+      const now = new Date();
+      const currentYear = now.getFullYear();
+      const currentMonth = String(now.getMonth() + 1).padStart(2, "0");
+      const currentDay = String(now.getDate()).padStart(2, "0");
+      const currentDateStr = `${currentYear}-${currentMonth}-${currentDay}`;
+      
+      const currentHour = String(now.getHours()).padStart(2, "0");
+      const currentMinute = String(now.getMinutes()).padStart(2, "0");
+      const currentTimeSlot = `${currentHour}:${currentMinute}`;
+
+      tasks.forEach(task => {
+        if (task.completed || task.archived || !task.deadline || !task.timeSlot) return;
+        
+        const isToday = task.deadline === currentDateStr;
+        const isTimeMatch = task.timeSlot === currentTimeSlot;
+        
+        if (isToday && isTimeMatch) {
+          const notificationKey = `${task.id}-${task.deadline}-${task.timeSlot}`;
+          if (!notifiedSlots.has(notificationKey)) {
+            // Play synthesized chime
+            playNudgeChime();
+            
+            // Show notification
+            if ("Notification" in window && Notification.permission === "granted") {
+              try {
+                new Notification(`Scheduled Task Nudge!`, {
+                  body: `It's ${task.timeSlot}. Let's focus on "${task.title}" now!`,
+                });
+              } catch (e) {
+                console.error("Failing to trigger push notification:", e);
+              }
+            }
+            
+            setNotifiedSlots(prev => {
+              const next = new Set(prev);
+              next.add(notificationKey);
+              return next;
+            });
+          }
+        }
+      });
+    };
+
+    checkScheduledSlots();
+    const interval = setInterval(checkScheduledSlots, 15000);
+    return () => clearInterval(interval);
+  }, [tasks, notifiedSlots]);
 
   // Save userName
   const saveUserNameState = async (newName: string) => {

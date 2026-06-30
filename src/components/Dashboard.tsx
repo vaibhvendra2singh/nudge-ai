@@ -1,6 +1,6 @@
 import React from "react";
 import { Task } from "../types";
-import { getTaskUrgencyDetails } from "../utils";
+import { getTaskUrgencyDetails, playNudgeChime } from "../utils";
 import Chatbot from "./Chatbot";
 
 const TaskProgressRing = ({ subtasks }: { subtasks: Task["subtasks"] }) => {
@@ -55,7 +55,7 @@ export default function Dashboard({
   onToggleComplete,
   onSelectTask,
   onNavigateToTab,
-  userName = "Alex",
+  userName = "User",
   onUpdateTask,
   onDeleteTask,
 }: DashboardProps) {
@@ -82,6 +82,244 @@ export default function Dashboard({
   });
 
   const [searchQuery, setSearchQuery] = React.useState("");
+
+  const [notificationPermission, setNotificationPermission] = React.useState(
+    typeof window !== "undefined" ? (Notification as any).permission : "default"
+  );
+
+  const requestNotificationPermission = async () => {
+    if ("Notification" in window) {
+      const permission = await Notification.requestPermission();
+      setNotificationPermission(permission);
+      if (permission === "granted") {
+        playNudgeChime();
+      }
+    }
+  };
+
+  // Gamification & Streak calculations
+  const completed = React.useMemo(() => tasks.filter(t => t.completed), [tasks]);
+  
+  // Extract unique completion dates
+  const completedDates = React.useMemo(() => {
+    return Array.from(new Set(
+      completed.map(t => {
+        const dateStr = t.completedAt || t.deadline || new Date().toISOString();
+        return dateStr.split("T")[0];
+      })
+    )).sort();
+  }, [completed]);
+
+  const streakStats = React.useMemo(() => {
+    if (completedDates.length === 0) {
+      return { currentStreak: 0, bestStreak: 0, totalCompleted: completed.length };
+    }
+
+    let currentStreak = 0;
+    let bestStreak = 0;
+    let tempStreak = 0;
+
+    const todayStr = new Date().toISOString().split("T")[0];
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().split("T")[0];
+
+    const parseDateStr = (str: string) => {
+      const [y, m, d] = str.split("-").map(Number);
+      return new Date(y, m - 1, d);
+    };
+
+    let lastDate: Date | null = null;
+
+    for (let i = 0; i < completedDates.length; i++) {
+      const currentDate = parseDateStr(completedDates[i]);
+      if (lastDate === null) {
+        tempStreak = 1;
+      } else {
+        const diffTime = Math.abs(currentDate.getTime() - lastDate.getTime());
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        
+        if (diffDays === 1) {
+          tempStreak++;
+        } else if (diffDays > 1) {
+          if (tempStreak > bestStreak) {
+            bestStreak = tempStreak;
+          }
+          tempStreak = 1;
+        }
+      }
+      lastDate = currentDate;
+    }
+
+    if (tempStreak > bestStreak) {
+      bestStreak = tempStreak;
+    }
+
+    const lastCompletedDateStr = completedDates[completedDates.length - 1];
+    const isActive = lastCompletedDateStr === todayStr || lastCompletedDateStr === yesterdayStr;
+    currentStreak = isActive ? tempStreak : 0;
+
+    return {
+      currentStreak,
+      bestStreak: Math.max(bestStreak, currentStreak),
+      totalCompleted: completed.length,
+    };
+  }, [completedDates, completed.length]);
+
+  // Badges structure
+  const badges = React.useMemo(() => {
+    const highPriorityCount = completed.filter(t => t.priority === "high").length;
+    const completedSubtasksCount = completed.reduce((sum, t) => sum + (t.subtasks?.filter(s => s.completed).length || 0), 0);
+
+    return [
+      {
+        id: "rookie",
+        name: "Productivity Rookie",
+        description: "Resolved your first task and initiated your journey",
+        icon: "spa",
+        active: streakStats.totalCompleted >= 1
+      },
+      {
+        id: "consistency",
+        name: "Consistency Master",
+        description: "Achieved a consecutive task completion streak of 3+ days",
+        icon: "local_fire_department",
+        active: streakStats.bestStreak >= 3
+      },
+      {
+        id: "deadline",
+        name: "Deadline Slayer",
+        description: "Completed 3 or more active tasks to clear your backlog",
+        icon: "gps_fixed",
+        active: streakStats.totalCompleted >= 3
+      },
+      {
+        id: "deep_worker",
+        name: "Deep Worker",
+        description: "Successfully resolved 2 or more High-Priority items",
+        icon: "offline_bolt",
+        active: highPriorityCount >= 2
+      },
+      {
+        id: "focus",
+        name: "Focus Champion",
+        description: "Cleared 5 or more subtasks under structured focus",
+        icon: "military_tech",
+        active: completedSubtasksCount >= 5
+      }
+    ];
+  }, [completed, streakStats]);
+
+  const [timeline, setTimeline] = React.useState<any[]>(() => {
+    const saved = localStorage.getItem("nudge_ai_timeline");
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {}
+    }
+    return [];
+  });
+  const [isTimelineLoading, setIsTimelineLoading] = React.useState(false);
+  const [timelineError, setTimelineError] = React.useState<string | null>(null);
+
+  const handlePlanMyDay = async () => {
+    setIsTimelineLoading(true);
+    setTimelineError(null);
+    try {
+      const response = await fetch("/api/gemini/plan-day", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          tasks: tasks.map(t => ({
+            title: t.title,
+            details: t.details,
+            priority: t.priority,
+            project: t.project,
+            deadline: t.deadline,
+            timeSlot: t.timeSlot
+          }))
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to compile timeline routine");
+      }
+
+      const data = await response.json();
+      if (data && Array.isArray(data.timeline)) {
+        setTimeline(data.timeline);
+        localStorage.setItem("nudge_ai_timeline", JSON.stringify(data.timeline));
+      } else {
+        throw new Error("Invalid response format received");
+      }
+    } catch (err: any) {
+      console.error("Timeline Generation Error:", err);
+      setTimelineError("Failed to synchronize with Gemini. Standard local timeline has been compiled instead.");
+      const fallback = getLocalFallbackPlanDay(tasks);
+      setTimeline(fallback.timeline);
+      localStorage.setItem("nudge_ai_timeline", JSON.stringify(fallback.timeline));
+    } finally {
+      setIsTimelineLoading(false);
+    }
+  };
+
+  const getLocalFallbackPlanDay = (tasksList: Task[]) => {
+    const active = tasksList.filter(t => !t.completed && !t.archived);
+    const urgent = active.filter(t => t.priority === "high");
+    const other = active.filter(t => t.priority !== "high");
+
+    const urgentTitles = urgent.map(t => t.title);
+    const otherTitles = other.map(t => t.title);
+
+    return {
+      timeline: [
+        {
+          time: "09:00 AM",
+          activity: "High-Priority Deep Focus block. Attack core tasks requiring maximum cognitive power.",
+          tasks: urgentTitles.slice(0, 2),
+          duration: "90 mins",
+          type: "focus"
+        },
+        {
+          time: "11:00 AM",
+          activity: "Administrative Sync & Communications checklist.",
+          tasks: otherTitles.slice(0, 1),
+          duration: "45 mins",
+          type: "admin"
+        },
+        {
+          time: "12:00 PM",
+          activity: "Mindful Lunch Break & Respite.",
+          tasks: [],
+          duration: "60 mins",
+          type: "break"
+        },
+        {
+          time: "01:30 PM",
+          activity: "Routine task execution block for supplementary project milestones.",
+          tasks: otherTitles.slice(1, 3),
+          duration: "90 mins",
+          type: "routine"
+        },
+        {
+          time: "03:30 PM",
+          activity: "Brief decompression block to stretch, rehydrate, and reset focus.",
+          tasks: [],
+          duration: "15 mins",
+          type: "break"
+        },
+        {
+          time: "04:00 PM",
+          activity: "Daily progression wrap-up and planning alignment for tomorrow.",
+          tasks: urgentTitles.slice(2, 4).concat(otherTitles.slice(3, 5)),
+          duration: "45 mins",
+          type: "review"
+        }
+      ]
+    };
+  };
 
   // Highlighted urgent tasks with NO completed subtasks
   const needsActionTasks = categorizedTasks.filter(item => {
@@ -223,6 +461,211 @@ export default function Dashboard({
           <span className="block text-2xl font-black text-slate-800 leading-none">{completedTasks.length}</span>
           <span className="text-slate-400 font-mono text-[9px] uppercase tracking-wider block mt-1">Resolved</span>
         </div>
+      </div>
+
+      {/* GAMIFICATION & AI PLANNER ROW */}
+      <div className="mb-8 grid grid-cols-1 lg:grid-cols-2 gap-6 font-sans">
+        
+        {/* Gamification Panel */}
+        <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm text-left flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-amber-500 font-bold text-lg">workspace_premium</span>
+                <h2 className="font-headline text-xs font-black text-slate-700 uppercase tracking-widest">
+                  Productivity Arena
+                </h2>
+              </div>
+              <span className="bg-amber-100 text-amber-800 font-mono text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
+                Level {Math.floor(streakStats.totalCompleted / 3) + 1}
+              </span>
+            </div>
+
+            {/* Streak & Completion Stats */}
+            <div className="grid grid-cols-3 gap-3 mb-5 bg-slate-50 border border-slate-100 rounded-xl p-3 text-center">
+              <div>
+                <span className="block text-xl font-black text-slate-800 leading-none flex items-center justify-center gap-0.5">
+                  {streakStats.currentStreak} <span className="text-amber-500 text-sm">🔥</span>
+                </span>
+                <span className="text-slate-400 font-mono text-[8px] uppercase tracking-wider block mt-1">Active Streak</span>
+              </div>
+              <div>
+                <span className="block text-xl font-black text-slate-800 leading-none flex items-center justify-center gap-0.5">
+                  {streakStats.bestStreak} <span className="text-amber-500 text-sm">⭐</span>
+                </span>
+                <span className="text-slate-400 font-mono text-[8px] uppercase tracking-wider block mt-1">Best Streak</span>
+              </div>
+              <div>
+                <span className="block text-xl font-black text-slate-800 leading-none flex items-center justify-center gap-0.5">
+                  {streakStats.totalCompleted} <span className="text-amber-500 text-sm">🏆</span>
+                </span>
+                <span className="text-slate-400 font-mono text-[8px] uppercase tracking-wider block mt-1">Resolved Tasks</span>
+              </div>
+            </div>
+
+            {/* Badges Collection */}
+            <div className="space-y-2.5">
+              <h3 className="font-headline text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                Earned Badges
+              </h3>
+              <div className="grid grid-cols-5 gap-2">
+                {badges.map(badge => (
+                  <div
+                    key={badge.id}
+                    className={`relative flex flex-col items-center justify-center p-2 rounded-lg border text-center group cursor-help transition-all ${
+                      badge.active 
+                        ? 'bg-amber-50/55 border-amber-200 text-amber-600 scale-100' 
+                        : 'bg-slate-50 border-slate-100 text-slate-300 opacity-40 grayscale'
+                    }`}
+                  >
+                    <span className="material-symbols-outlined text-xl">{badge.icon}</span>
+                    
+                    {/* Tooltip */}
+                    <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 hidden group-hover:block z-20 w-44 bg-slate-800 text-white text-[10px] p-2 rounded-lg shadow-md font-sans text-left pointer-events-none transition-all border border-slate-700">
+                      <p className="font-bold text-amber-400 uppercase tracking-wide mb-0.5">{badge.name}</p>
+                      <p className="text-slate-200 leading-snug">{badge.description}</p>
+                      {!badge.active && (
+                        <p className="font-mono text-[8px] text-rose-300 uppercase mt-1 font-bold">🔒 Locked</p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Quick Audio Tester */}
+          <div className="mt-5 pt-3 border-t border-slate-100 flex items-center justify-between">
+            <span className="text-[10px] text-slate-400 font-mono uppercase tracking-wider">Tone System</span>
+            {notificationPermission === "default" ? (
+              <button
+                type="button"
+                onClick={requestNotificationPermission}
+                className="flex items-center gap-1 font-mono text-[9px] font-bold uppercase tracking-wider text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1 rounded transition-all cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[11px]">notifications</span>
+                <span>Enable Push Notifications</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={playNudgeChime}
+                className="flex items-center gap-1 font-mono text-[9px] font-bold uppercase tracking-wider text-slate-600 hover:text-black bg-slate-100 hover:bg-slate-200 px-2.5 py-1 rounded transition-all cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[11px]">volume_up</span>
+                <span>Test Audio Nudge</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* AI "Plan My Day" Scheduler Panel */}
+        <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm text-left flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-indigo-500 font-bold text-lg">psychology</span>
+                <h2 className="font-headline text-xs font-black text-slate-700 uppercase tracking-widest">
+                  AI Daily Scheduler
+                </h2>
+              </div>
+              <button
+                type="button"
+                disabled={isTimelineLoading}
+                onClick={handlePlanMyDay}
+                className={`flex items-center gap-1 px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-mono text-[9px] uppercase font-bold tracking-wider active:scale-95 transition-all cursor-pointer disabled:opacity-55 disabled:cursor-not-allowed`}
+              >
+                {isTimelineLoading ? (
+                  <>
+                    <div className="w-3 h-3 border-2 border-white border-t-transparent animate-spin rounded-full mr-0.5"></div>
+                    <span>Sequencing...</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined text-[12px]">sync</span>
+                    <span>{timeline.length > 0 ? "Re-Plan Day" : "Plan My Day"}</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* Timeline sequence flow */}
+            {isTimelineLoading ? (
+              <div className="flex flex-col items-center justify-center py-10 text-center space-y-2">
+                <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent animate-spin rounded-full"></div>
+                <p className="font-mono text-[9px] uppercase font-bold tracking-wider text-indigo-700">
+                  Gemini is evaluating task deadlines...
+                </p>
+              </div>
+            ) : timeline.length === 0 ? (
+              <div className="border border-slate-150 border-dashed rounded-xl p-5 text-center space-y-2">
+                <p className="font-body text-slate-500 text-xs">
+                  Create high-agency focus structures. Click "Plan My Day" to sequence your active objectives into a beautiful daily timeline.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3 max-h-[175px] overflow-y-auto pr-1">
+                {timelineError && (
+                  <p className="font-mono text-[8px] text-amber-600 font-bold uppercase tracking-wider mb-2">
+                    ⚠️ {timelineError}
+                  </p>
+                )}
+                <div className="relative border-l border-slate-100 pl-4 ml-2 space-y-4">
+                  {timeline.map((block, idx) => {
+                    return (
+                      <div key={idx} className="relative text-left">
+                        {/* Timeline Node Point */}
+                        <div className={`absolute -left-[21px] top-1 w-2.5 h-2.5 rounded-full border-2 ${
+                          block.type === "focus" ? "border-indigo-600 bg-white" : "border-slate-400 bg-white"
+                        }`} />
+                        
+                        <div className="flex flex-wrap items-baseline gap-2">
+                          <span className="font-mono text-[10px] font-black text-slate-800">{block.time}</span>
+                          <span className="text-[8px] font-mono uppercase bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-bold">
+                            {block.duration}
+                          </span>
+                        </div>
+                        <p className="text-slate-600 text-[11px] font-body font-medium mt-1 leading-relaxed">
+                          {block.activity}
+                        </p>
+                        
+                        {block.tasks && block.tasks.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-1.5">
+                            {block.tasks.map((taskTitle: string, tIdx: number) => (
+                              <span
+                                key={tIdx}
+                                className="text-[8px] font-mono font-bold bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-100/40"
+                              >
+                                {taskTitle}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+          
+          <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-400 font-mono">
+            <span>Powered by Gemini 3.5</span>
+            {timeline.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setTimeline([]);
+                  localStorage.removeItem("nudge_ai_timeline");
+                }}
+                className="text-[9px] hover:text-black font-bold uppercase transition-all cursor-pointer"
+              >
+                Clear Plan
+              </button>
+            )}
+          </div>
+        </div>
+
       </div>
 
       {/* NEEDS ACTION NOW HIGHLIGHT SECTION */}

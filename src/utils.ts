@@ -194,3 +194,47 @@ export function downloadICSFile(task: {
   URL.revokeObjectURL(url);
 }
 
+/**
+ * Synthesizes a subtle, premium ambient "nudge" or "focus tone" chime using the browser's Web Audio API.
+ * This does not rely on static audio files and works beautifully in modern web runtimes.
+ */
+export function playNudgeChime() {
+  try {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const ctx = new AudioContextClass();
+    
+    // Warm, organic dual-frequency chime
+    const osc1 = ctx.createOscillator();
+    const osc2 = ctx.createOscillator();
+    const gainNode = ctx.createGain();
+    
+    osc1.type = "sine";
+    // Warm perfect fifth: C5 (523.25 Hz)
+    osc1.frequency.setValueAtTime(523.25, ctx.currentTime);
+    osc1.frequency.exponentialRampToValueAtTime(783.99, ctx.currentTime + 0.15); // Slide to G5
+    
+    osc2.type = "sine";
+    // Supporting third: E5 (659.25 Hz)
+    osc2.frequency.setValueAtTime(659.25, ctx.currentTime);
+    osc2.frequency.exponentialRampToValueAtTime(1046.50, ctx.currentTime + 0.15); // Slide to C6
+    
+    gainNode.gain.setValueAtTime(0.001, ctx.currentTime);
+    gainNode.gain.linearRampToValueAtTime(0.25, ctx.currentTime + 0.05); // Fade in slightly
+    gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.2); // Exp decay
+    
+    osc1.connect(gainNode);
+    osc2.connect(gainNode);
+    gainNode.connect(ctx.destination);
+    
+    osc1.start();
+    osc2.start();
+    
+    osc1.stop(ctx.currentTime + 1.2);
+    osc2.stop(ctx.currentTime + 1.2);
+  } catch (err) {
+    console.warn("AudioContext playback failed or block by browser autoplay limits:", err);
+  }
+}
+
+

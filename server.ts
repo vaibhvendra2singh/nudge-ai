@@ -742,6 +742,122 @@ app.post("/api/gemini/chat", async (req: express.Request, res: express.Response)
   }
 });
 
+// Helper for local fallback daily planning
+function getLocalFallbackPlanDay(tasks: any[]) {
+  const active = (tasks || []).filter((t: any) => !t.completed && !t.archived);
+  const urgent = active.filter((t: any) => t.priority === "high");
+  const other = active.filter((t: any) => t.priority !== "high");
+
+  const urgentTitles = urgent.map((t: any) => t.title);
+  const otherTitles = other.map((t: any) => t.title);
+
+  return {
+    timeline: [
+      {
+        time: "09:00 AM",
+        activity: "High-Priority Deep Focus block. Attack core tasks requiring maximum cognitive power.",
+        tasks: urgentTitles.slice(0, 2),
+        duration: "90 mins",
+        type: "focus"
+      },
+      {
+        time: "11:00 AM",
+        activity: "Administrative Sync & Communications checklist.",
+        tasks: otherTitles.slice(0, 1),
+        duration: "45 mins",
+        type: "admin"
+      },
+      {
+        time: "12:00 PM",
+        activity: "Mindful Lunch Break & Respite.",
+        tasks: [],
+        duration: "60 mins",
+        type: "break"
+      },
+      {
+        time: "01:30 PM",
+        activity: "Routine task execution block for supplementary project milestones.",
+        tasks: otherTitles.slice(1, 3),
+        duration: "90 mins",
+        type: "routine"
+      },
+      {
+        time: "03:30 PM",
+        activity: "Brief decompression block to stretch, rehydrate, and reset focus.",
+        tasks: [],
+        duration: "15 mins",
+        type: "break"
+      },
+      {
+        time: "04:00 PM",
+        activity: "Daily progression wrap-up and planning alignment for tomorrow.",
+        tasks: urgentTitles.slice(2, 4).concat(otherTitles.slice(3, 5)),
+        duration: "45 mins",
+        type: "review"
+      }
+    ]
+  };
+}
+
+// 7. API Route: AI Daily Scheduler ("Plan My Day")
+app.post("/api/gemini/plan-day", async (req: express.Request, res: express.Response): Promise<void> => {
+  const { tasks } = req.body;
+  
+  try {
+    const ai = getAiClient();
+    const prompt = `Evaluate the following list of active user tasks:
+${JSON.stringify(tasks || [])}
+
+Generate a beautifully sequenced daily timeline block plan starting from 09:00 AM. Align tasks to appropriate focus blocks based on priority and project. Balance the schedule with Deep Work (focus), quick sync/emails (admin), routine work, regular hydration/lunch breaks (break), and end-of-day alignment (review). 
+
+Return the result as a JSON object matching the defined responseSchema.`;
+
+    const config = {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          timeline: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                time: { type: Type.STRING, description: "Formatted time block start, e.g., '09:00 AM' or '02:30 PM'" },
+                activity: { type: Type.STRING, description: "Comprehensive, motivating block activity description" },
+                tasks: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Array of user task titles relevant to this block" },
+                duration: { type: Type.STRING, description: "Block duration, e.g., '60 mins' or '15 mins'" },
+                type: { type: Type.STRING, description: "Category: focus, admin, routine, break, or review" }
+              },
+              required: ["time", "activity", "tasks", "duration", "type"]
+            }
+          }
+        },
+        required: ["timeline"]
+      }
+    };
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: prompt,
+      config
+    });
+
+    if (response && response.text) {
+      const data = cleanAndParseJSON(response.text);
+      if (data && Array.isArray(data.timeline)) {
+        res.json(data);
+        return;
+      }
+    }
+    
+    // Fallback if AI response was unparseable
+    res.json(getLocalFallbackPlanDay(tasks));
+  } catch (error: any) {
+    console.error("Error in /api/gemini/plan-day:", error?.message || error);
+    res.json(getLocalFallbackPlanDay(tasks));
+  }
+});
+
 // Health check endpoint
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok" });
@@ -760,6 +876,10 @@ async function startServer() {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
+      res.setHeader("Surrogate-Control", "no-store");
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
